@@ -1,0 +1,20 @@
+[project]
+name = "appointy-mathnasium-mcp"
+version = "0.1.0"
+description = "Mathnasium support-native MCP server for Appointy read and diagnostic workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx==0.28.1",
+    "mcp[cli]>=1.3.0",
+]
+
+[[project.authors]]
+name = "Appointy Support Engineering"
+
+[build-system]
+requires = ["hatchling", "setuptools", "wheel"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+appointy-mathnasium-mcp = "appointy_mathnasium_mcp.server:main"
