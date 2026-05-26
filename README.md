@@ -80,3 +80,22 @@ uv run appointy-mathnasium-mcp --transport streamable-http --host 0.0.0.0 --port
 Health endpoint:
 
 - `GET /health`
+
+## Docker
+
+Build:
+
+```bash
+docker build -t appointy-mathnasium-mcp .
+```
+
+Run (uses existing env vars):
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e APPOINTY_API_BASE_URL \
+  -e APPOINTY_API_KEY \
+  -e MATHNASIUM_GROUP_ID \
+  -e MATHNASIUM_COMPANY_ID_OPTIONAL \
+  appointy-mathnasium-mcp
+```
