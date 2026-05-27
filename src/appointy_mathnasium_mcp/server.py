@@ -1377,6 +1377,54 @@ def _map_center_custom_ids_to_location_ids(center_custom_ids: List[str], context
     return list(dict.fromkeys([value for value in mapped if value]))
 
 
+def _build_center_details_from_ids(center_ids: List[str], context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not center_ids:
+        return []
+
+    unique_ids = []
+    seen = set()
+    for center_id in center_ids:
+        value = _to_text(center_id).strip()
+        if not value:
+            continue
+        resolved = _resolve_full_location_id(value, context) or value
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_ids.append(resolved)
+
+    center_index = [row for row in _listify(context.get("centerIndex")) if isinstance(row, dict)]
+    hydrated = []
+    for wanted_id in unique_ids:
+        match = None
+        for row in center_index:
+            location_id = _to_text(row.get("locationId"))
+            if not location_id:
+                continue
+            if location_id == wanted_id or location_id.endswith(f"/{wanted_id}") or wanted_id.endswith(f"/{location_id}"):
+                match = row
+                break
+        if not match:
+            continue
+        booking_urls = _listify(match.get("bookingUrls"))
+        hydrated.append(
+            {
+                "companyId": _to_text(match.get("companyId")),
+                "locationId": _to_text(match.get("locationId")),
+                "centerName": _to_text(match.get("name")),
+                "companyDisplayName": _to_text(match.get("companyDisplayName")),
+                "customLocationId": _to_text(match.get("customLocationId")),
+                "slug": _to_text(match.get("slug")),
+                "companySlug": _to_text(match.get("companySlug")),
+                "timezone": _to_text(match.get("timezone")),
+                "active": bool(match.get("active", True)),
+                "bookingUrls": booking_urls,
+                "bookingUrl": booking_urls[0] if booking_urls else "",
+            }
+        )
+    return hydrated
+
+
 async def _find_guardians_internal(
     *,
     parent_id: str,
@@ -1482,6 +1530,7 @@ async def _find_guardians_internal(
         except AppointyApiError as exc:
             warnings.append(f"Guardian detail enrichment failed for {_to_text(guardian.get('guardianId'))}: {exc}")
 
+        center_details = _build_center_details_from_ids(derived_centers, context)
         results.append(
             {
                 "guardianId": guardian["guardianId"],
@@ -1489,6 +1538,7 @@ async def _find_guardians_internal(
                 "email": _mask_email(guardian_email),
                 "phone": guardian_phone,
                 "centerIds": derived_centers,
+                "centers": center_details,
                 "studentIds": [s.get("studentId", "") for s in enrichment_students if isinstance(s, dict)],
                 "students": enrichment_students,
                 "active": bool(guardian.get("active", True)),
