@@ -1941,6 +1941,21 @@ async def _run_codefac_log_search(
                 "elapsedSeconds": elapsed_seconds,
                 "pollCount": poll_count,
             }
+        if run_status == "awaiting_credentials":
+            return {
+                "status": "awaiting_credentials",
+                "pipelineRunId": pipeline_run_id,
+                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+                "pipelineStatus": run_status,
+                "error": _to_text(
+                    _coalesce(
+                        last_run.get("errorMessage"),
+                        "Codefac pipeline is waiting for provider credentials to be reconnected.",
+                    )
+                ),
+                "elapsedSeconds": elapsed_seconds,
+                "pollCount": poll_count,
+            }
         if elapsed_seconds >= timeout_seconds:
             return {
                 "status": "timeout",

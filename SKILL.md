@@ -97,6 +97,7 @@ Behavior:
 - The MCP adds instructions telling Codefac not to post to Slack and to return only the final investigation report as pipeline output.
 - The tool blocks/polls until Codefac completes, fails, asks for input, or times out.
 - If Codefac returns `awaiting_input`, surface `pendingQuestions` to the user/agent.
+- If Codefac returns `awaiting_credentials`, tell the operator that the Codefac provider sign-in/agent credentials need to be reconnected before log investigation can complete.
 
 Do not use when:
 - A simple center/guardian/student lookup can answer the ticket.
@@ -142,6 +143,7 @@ For log search, return:
 - Codefac run status and `pipelineRunId`
 - final investigation report if completed
 - pending questions if Codefac asks for input
+- credential reconnect message if Codefac returns `awaiting_credentials`
 - timeout/error message if no completed report is available
 
 ## Scope and safety

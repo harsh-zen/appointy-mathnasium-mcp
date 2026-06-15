@@ -62,7 +62,7 @@ Optional:
 - `mathnasium_search_logs`
   - Accepts a natural-language `prompt`.
   - Prepends instructions telling Codefac not to post to Slack and to return the final investigation report as output.
-  - Triggers `CODEFAC_PIPELINE_ID`, polls synchronously, and returns `success`, `failed`, `awaiting_input`, or `timeout`.
+  - Triggers `CODEFAC_PIPELINE_ID`, polls synchronously, and returns `success`, `failed`, `awaiting_input`, `awaiting_credentials`, or `timeout`.
   - Optional `timeoutSeconds` is clamped to 30-300 seconds.
 
 Transport/runtime (optional):
