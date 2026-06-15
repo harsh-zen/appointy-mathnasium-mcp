@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
 from urllib.parse import urljoin
 
@@ -1075,19 +1076,55 @@ def _parse_metadata(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    text = _to_text(value).strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.year <= 1:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_open_ended_date(value: Any) -> bool:
+    text = _to_text(value).strip()
+    return not text or text.startswith("0001-01-01")
+
+
+def _enrolment_booking_status(row: Dict[str, Any], now: datetime) -> str:
+    start = _parse_datetime(row.get("startDate"))
+    termination = _parse_datetime(row.get("terminationDate"))
+    has_open_end = _is_open_ended_date(row.get("terminationDate"))
+
+    if start and start > now:
+        return "active"
+    if start and start <= now and (has_open_end or (termination and termination >= now)):
+        return "active"
+    if not start and (has_open_end or (termination and termination >= now)):
+        return "active"
+    return "inactive"
+
+
 def _normalize_enrolments(value: Any) -> Tuple[List[Dict[str, Any]], str]:
     enrolments: List[Dict[str, Any]] = []
     if not isinstance(value, list):
-        return enrolments, "unknown"
+        return enrolments, "inactive"
 
-    has_active = False
+    now = datetime.now(timezone.utc)
+    can_schedule_sessions = False
     for row in value:
         if not isinstance(row, dict):
             continue
         termination = _to_text(row.get("terminationDate"))
-        status = "active" if not termination or termination.startswith("0001-01-01") else "inactive"
+        status = _enrolment_booking_status(row, now)
         if status == "active":
-            has_active = True
+            can_schedule_sessions = True
         enrolments.append(
             {
                 "enrolmentId": _to_text(row.get("id")),
@@ -1107,7 +1144,7 @@ def _normalize_enrolments(value: Any) -> Tuple[List[Dict[str, Any]], str]:
                 "holds": _listify(row.get("holds")),
             }
         )
-    return enrolments, ("active" if has_active else ("inactive" if enrolments else "unknown"))
+    return enrolments, ("active" if can_schedule_sessions else "inactive")
 
 
 def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
@@ -1228,6 +1265,7 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
             location_link = row.get("studentLocationsLink") if isinstance(row.get("studentLocationsLink"), dict) else {}
             location_ids = _listify(location_link.get("locationIds"))
             enrolments, enrolment_status = _normalize_enrolments(row.get("enrolments"))
+            can_schedule_sessions = enrolment_status == "active"
             candidates.append(
                 {
                     "studentId": student_id or f"student:{name}",
@@ -1239,7 +1277,9 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "enrollments": enrolments,
                     "grade": _to_text(row.get("grade")),
                     "customStudentId": _to_text(row.get("customStudentId")),
-                    "activeMembership": bool(row.get("activeMembership", False)),
+                    "activeMembership": can_schedule_sessions,
+                    "appointyActiveMembership": bool(row.get("activeMembership", False)),
+                    "canScheduleSessions": can_schedule_sessions,
                     "_raw": row,
                 }
             )
@@ -1257,8 +1297,11 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "guardianIds": [],
                     "centerIds": [],
                     "centerCustomIds": [],
-                    "enrollmentStatus": "unknown",
+                    "enrollmentStatus": "inactive",
                     "enrollments": [],
+                    "activeMembership": False,
+                    "appointyActiveMembership": bool(row.get("activeMembership", False)),
+                    "canScheduleSessions": False,
                     "_raw": row,
                 }
             )
@@ -1523,6 +1566,8 @@ async def _find_guardians_internal(
                         "customStudentId": _to_text(detail_student.get("customStudentId")),
                         "enrollmentStatus": _to_text(detail_student.get("enrollmentStatus")),
                         "activeMembership": bool(detail_student.get("activeMembership", False)),
+                        "appointyActiveMembership": bool(detail_student.get("appointyActiveMembership", False)),
+                        "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
                         "enrollments": _listify(detail_student.get("enrollments")),
                     }
                 )
@@ -1648,6 +1693,8 @@ async def _find_students_internal(
                 "enrollments": _listify(detail_student.get("enrollments")),
                 "customStudentId": _to_text(detail_student.get("customStudentId")),
                 "activeMembership": bool(detail_student.get("activeMembership", False)),
+                "appointyActiveMembership": bool(detail_student.get("appointyActiveMembership", False)),
+                "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
                 "confidence": round(confidence, 3),
                 "matchReason": reason,
             }
