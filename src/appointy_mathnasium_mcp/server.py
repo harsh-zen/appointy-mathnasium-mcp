@@ -171,7 +171,6 @@ query CustomerDetailQuery($customerId: String) {
         email
         grade
         customStudentId
-        activeMembership
         metadata
         primaryGuardianId
         studentLocationsLink {
@@ -236,7 +235,6 @@ query FindStudentQuery(
         email
         grade
         customStudentId
-        activeMembership
         metadata
         primaryGuardianId
         studentLocationsLink {
@@ -296,7 +294,6 @@ query FindStudentQuery(
         email
         grade
         customStudentId
-        activeMembership
         metadata
         primaryGuardianId
         studentLocationsLink {
@@ -346,7 +343,6 @@ query StudentDetailQuery($id: ID!) {
     email
     grade
     customStudentId
-    activeMembership
     metadata
     primaryGuardianId
     studentLocationsLink {
@@ -1278,7 +1274,6 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "grade": _to_text(row.get("grade")),
                     "customStudentId": _to_text(row.get("customStudentId")),
                     "activeMembership": can_schedule_sessions,
-                    "appointyActiveMembership": bool(row.get("activeMembership", False)),
                     "canScheduleSessions": can_schedule_sessions,
                     "_raw": row,
                 }
@@ -1300,7 +1295,6 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "enrollmentStatus": "inactive",
                     "enrollments": [],
                     "activeMembership": False,
-                    "appointyActiveMembership": bool(row.get("activeMembership", False)),
                     "canScheduleSessions": False,
                     "_raw": row,
                 }
@@ -1566,7 +1560,6 @@ async def _find_guardians_internal(
                         "customStudentId": _to_text(detail_student.get("customStudentId")),
                         "enrollmentStatus": _to_text(detail_student.get("enrollmentStatus")),
                         "activeMembership": bool(detail_student.get("activeMembership", False)),
-                        "appointyActiveMembership": bool(detail_student.get("appointyActiveMembership", False)),
                         "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
                         "enrollments": _listify(detail_student.get("enrollments")),
                     }
@@ -1693,7 +1686,6 @@ async def _find_students_internal(
                 "enrollments": _listify(detail_student.get("enrollments")),
                 "customStudentId": _to_text(detail_student.get("customStudentId")),
                 "activeMembership": bool(detail_student.get("activeMembership", False)),
-                "appointyActiveMembership": bool(detail_student.get("appointyActiveMembership", False)),
                 "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
                 "confidence": round(confidence, 3),
                 "matchReason": reason,
