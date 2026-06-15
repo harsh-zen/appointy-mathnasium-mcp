@@ -14,6 +14,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_center`
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
+- `mathnasium_search_logs`
 
 ## Data Source Notes
 
@@ -22,6 +23,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian` is GraphQL-first (`customers`) with guardian-student enrichment from `CustomerDetailQuery`.
 - `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
+- `mathnasium_search_logs` triggers the configured Codefac investigation pipeline, polls for completion, and returns the final plain-text report.
 
 ## Environment Variables
 
@@ -40,6 +42,12 @@ Optional:
 - `APPOINTY_TIMEOUT_SECONDS` (default `20`)
 - `ENABLE_PII_MASKING` (default `false`)
 - `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://www.appointy.com/{locationSlug}`)
+- `CODEFAC_API_BASE_URL` (default `https://codefac.ai`)
+- `CODEFAC_API_KEY`
+- `CODEFAC_PIPELINE_ID`
+- `CODEFAC_TIMEOUT_SECONDS` (default `30`)
+- `CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS` (default `240`)
+- `CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS` (default `5`)
 
 ## Tool Input Notes
 
@@ -51,6 +59,11 @@ Optional:
   - Uses group-level student search (`MATHNASIUM_GROUP_ID`) directly.
   - `guardianId` is supported as a direct filter.
   - `guardianEmail` is only a hint and is ignored unless `guardianId` is also provided.
+- `mathnasium_search_logs`
+  - Accepts a natural-language `prompt`.
+  - Prepends instructions telling Codefac not to post to Slack and to return the final investigation report as output.
+  - Triggers `CODEFAC_PIPELINE_ID`, polls synchronously, and returns `success`, `failed`, `awaiting_input`, or `timeout`.
+  - Optional `timeoutSeconds` is clamped to 30-300 seconds.
 
 Transport/runtime (optional):
 
@@ -97,5 +110,7 @@ docker run --rm -p 8080:8080 \
   -e APPOINTY_API_KEY \
   -e MATHNASIUM_GROUP_ID \
   -e MATHNASIUM_COMPANY_ID_OPTIONAL \
+  -e CODEFAC_API_KEY \
+  -e CODEFAC_PIPELINE_ID \
   appointy-mathnasium-mcp
 ```

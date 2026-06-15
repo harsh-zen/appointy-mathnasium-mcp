@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import base64
 import json
 import logging
@@ -77,6 +78,12 @@ GROUP_CONTEXT_CACHE_TTL_SECONDS = _safe_int_from_env("GROUP_CONTEXT_CACHE_TTL_SE
 APPOINTY_TIMEOUT_SECONDS = _safe_int_from_env("APPOINTY_TIMEOUT_SECONDS", 20)
 ENABLE_PII_MASKING = _bool_from_env("ENABLE_PII_MASKING", False)
 APPOINTY_BOOKING_URL_TEMPLATE = os.getenv("APPOINTY_BOOKING_URL_TEMPLATE", "https://www.appointy.com/{locationSlug}")
+CODEFAC_API_BASE_URL = os.getenv("CODEFAC_API_BASE_URL", "https://codefac.ai").rstrip("/")
+CODEFAC_API_KEY = os.getenv("CODEFAC_API_KEY")
+CODEFAC_PIPELINE_ID = os.getenv("CODEFAC_PIPELINE_ID")
+CODEFAC_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_TIMEOUT_SECONDS", 30)
+CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS", 240)
+CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS", 5)
 
 
 GRAPHQL_APP_QUERY = """
@@ -412,6 +419,23 @@ def _require_config() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _require_codefac_config() -> Optional[Dict[str, Any]]:
+    missing = []
+    if not CODEFAC_API_BASE_URL:
+        missing.append("CODEFAC_API_BASE_URL")
+    if not CODEFAC_API_KEY:
+        missing.append("CODEFAC_API_KEY")
+    if not CODEFAC_PIPELINE_ID:
+        missing.append("CODEFAC_PIPELINE_ID")
+    if missing:
+        return {
+            "status": "failed",
+            "error": "Missing required Codefac environment variables",
+            "missing": missing,
+        }
+    return None
+
+
 def _normalize_text(value: Optional[str]) -> str:
     return (value or "").strip()
 
@@ -605,6 +629,13 @@ def _status_bool(value: Any) -> Optional[bool]:
 
 
 class AppointyApiError(Exception):
+    def __init__(self, message: str, status_code: Optional[int] = None, payload: Any = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.payload = payload
+
+
+class CodefacApiError(Exception):
     def __init__(self, message: str, status_code: Optional[int] = None, payload: Any = None) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -822,6 +853,71 @@ class AppointyClient:
 
 
 appointy = AppointyClient()
+
+
+class CodefacClient:
+    def __init__(self) -> None:
+        self.base_url = CODEFAC_API_BASE_URL
+        self.api_key = CODEFAC_API_KEY
+        self.pipeline_id = CODEFAC_PIPELINE_ID
+        self.timeout = CODEFAC_TIMEOUT_SECONDS
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        error = _require_codefac_config()
+        if error:
+            raise CodefacApiError(error["error"], payload=error)
+
+        url = urljoin(f"{self.base_url}/", path.lstrip("/"))
+        headers = {
+            "accept": "application/json",
+            "x-api-key": self.api_key or "",
+        }
+        if json_body is not None:
+            headers["content-type"] = "application/json"
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.request(method, url, headers=headers, json=json_body)
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            try:
+                parsed_payload: Any = response.json()
+            except Exception:
+                parsed_payload = {"raw": response.text}
+        else:
+            parsed_payload = {"raw": response.text}
+
+        if response.is_error:
+            raise CodefacApiError(
+                f"Codefac API error {response.status_code}",
+                status_code=response.status_code,
+                payload=parsed_payload,
+            )
+        return parsed_payload
+
+    async def trigger_pipeline(self, work_item: str) -> Dict[str, Any]:
+        payload = await self._request(
+            "POST",
+            "/api/pipelines/trigger",
+            json_body={
+                "pipelineId": self.pipeline_id,
+                "workItem": work_item,
+            },
+        )
+        return payload if isinstance(payload, dict) else {"raw": payload}
+
+    async def get_run(self, pipeline_run_id: str) -> Dict[str, Any]:
+        payload = await self._request("GET", f"/api/pipelines/runs/{pipeline_run_id}")
+        return payload if isinstance(payload, dict) else {"raw": payload}
+
+
+codefac = CodefacClient()
 
 _group_context_cache: Dict[str, Any] = {
     "expires_at": 0.0,
@@ -1751,6 +1847,115 @@ async def _find_centers_internal(*, query: Optional[str], include_inactive: bool
     return {"matches": matches}
 
 
+def _build_codefac_log_search_work_item(prompt: str) -> str:
+    cleaned_prompt = _normalize_space(_to_text(prompt))
+    return "\n".join(
+        [
+            "Mathnasium support log/sync investigation request.",
+            "",
+            "Important output instructions:",
+            "- Do not post to Slack.",
+            "- Do not call Slack APIs.",
+            "- Do not send messages externally.",
+            "- Return only the final investigation report as plain text in the pipeline output/final artifact.",
+            "- Include the evidence, likely root cause, and support-ready next steps when available.",
+            "",
+            "Investigation request:",
+            cleaned_prompt,
+        ]
+    )
+
+
+async def _run_codefac_log_search(
+    *,
+    prompt: str,
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+) -> Dict[str, Any]:
+    cleaned_prompt = _normalize_space(_to_text(prompt))
+    if not cleaned_prompt:
+        return {
+            "status": "failed",
+            "error": "prompt is required",
+        }
+
+    timeout_seconds = max(30, min(timeout_seconds, 300))
+    poll_interval_seconds = max(2, min(poll_interval_seconds, 15))
+    work_item = _build_codefac_log_search_work_item(cleaned_prompt)
+
+    started_at = time.monotonic()
+    trigger_payload = await codefac.trigger_pipeline(work_item)
+    pipeline_run_id = _to_text(
+        _coalesce(
+            trigger_payload.get("pipelineRunId"),
+            trigger_payload.get("runId"),
+            trigger_payload.get("id"),
+        )
+    )
+    if not pipeline_run_id:
+        return {
+            "status": "failed",
+            "error": "Codefac trigger response did not include pipelineRunId",
+            "triggerStatus": trigger_payload.get("status"),
+        }
+
+    last_run: Dict[str, Any] = {}
+    poll_count = 0
+    while True:
+        poll_count += 1
+        last_run = await codefac.get_run(pipeline_run_id)
+        run_status = _to_text(last_run.get("status")).lower()
+        output = _to_text(_coalesce(last_run.get("output"), last_run.get("finalArtifact")))
+        elapsed_seconds = round(time.monotonic() - started_at, 3)
+
+        if run_status == "completed":
+            return {
+                "status": "success",
+                "pipelineRunId": pipeline_run_id,
+                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+                "pipelineStatus": run_status,
+                "output": output,
+                "finalArtifact": _to_text(last_run.get("finalArtifact")),
+                "completedStations": last_run.get("completedStations"),
+                "elapsedSeconds": elapsed_seconds,
+                "pollCount": poll_count,
+            }
+        if run_status in {"failed", "cancelled", "canceled", "error"}:
+            return {
+                "status": "failed",
+                "pipelineRunId": pipeline_run_id,
+                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+                "pipelineStatus": run_status,
+                "error": _to_text(_coalesce(last_run.get("errorMessage"), "Codefac pipeline failed")),
+                "output": output,
+                "elapsedSeconds": elapsed_seconds,
+                "pollCount": poll_count,
+            }
+        if run_status == "awaiting_input":
+            return {
+                "status": "awaiting_input",
+                "pipelineRunId": pipeline_run_id,
+                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+                "pipelineStatus": run_status,
+                "pendingQuestions": last_run.get("pendingQuestions"),
+                "elapsedSeconds": elapsed_seconds,
+                "pollCount": poll_count,
+            }
+        if elapsed_seconds >= timeout_seconds:
+            return {
+                "status": "timeout",
+                "pipelineRunId": pipeline_run_id,
+                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+                "pipelineStatus": run_status or "unknown",
+                "output": output,
+                "error": f"Timed out after {timeout_seconds} seconds waiting for Codefac pipeline output.",
+                "elapsedSeconds": elapsed_seconds,
+                "pollCount": poll_count,
+            }
+
+        await asyncio.sleep(poll_interval_seconds)
+
+
 @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
 async def health_check(_: Request) -> JSONResponse:
     return JSONResponse(
@@ -1850,6 +2055,35 @@ async def mathnasium_find_center(
         )
     except AppointyApiError as exc:
         return {"matches": [], "warnings": [str(exc)]}
+
+
+@mcp.tool()
+async def mathnasium_search_logs(
+    prompt: str,
+    timeoutSeconds: int = CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS,
+    pollIntervalSeconds: int = CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS,
+) -> Dict[str, Any]:
+    """Run a synchronous Codefac log/sync investigation and return the final plain-text report."""
+    config_error = _require_codefac_config()
+    if config_error:
+        return config_error
+    try:
+        return await _run_codefac_log_search(
+            prompt=prompt,
+            timeout_seconds=timeoutSeconds,
+            poll_interval_seconds=pollIntervalSeconds,
+        )
+    except CodefacApiError as exc:
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "details": exc.payload,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "error": f"Unexpected error in Codefac log search: {exc}",
+        }
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

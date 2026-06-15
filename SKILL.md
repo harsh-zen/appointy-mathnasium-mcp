@@ -13,6 +13,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_center`
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
+- `mathnasium_search_logs`
 
 ## When to use
 
@@ -22,6 +23,7 @@ Use this skill when a support workflow needs:
 - guardian account lookup
 - student lookup and enrollment visibility
 - mapping ticket text to valid Appointy entities
+- log/sync investigation through the outsourced Codefac investigator
 
 ## Tool contracts
 
@@ -78,6 +80,28 @@ Behavior:
 - Best filters: `studentName`, `guardianId`, `centerId`.
 - `guardianEmail` alone is weak; prefer `guardianId`.
 
+### `mathnasium_search_logs`
+
+Purpose:
+- Run a synchronous outsourced log/sync investigation through the configured Codefac pipeline.
+
+Use when:
+- Appointy entity lookup is not enough and the ticket requires backend logs, sync investigation, or Radius/Appointy sync failure evidence.
+- The user explicitly asks to check logs, sync logs, pipeline/sync failures, or why an entity did not sync.
+
+Input:
+- `prompt` is required and should be a natural-language investigation request with all known ticket context.
+- Optional `timeoutSeconds` controls how long to wait for the final report.
+
+Behavior:
+- The MCP adds instructions telling Codefac not to post to Slack and to return only the final investigation report as pipeline output.
+- The tool blocks/polls until Codefac completes, fails, asks for input, or times out.
+- If Codefac returns `awaiting_input`, surface `pendingQuestions` to the user/agent.
+
+Do not use when:
+- A simple center/guardian/student lookup can answer the ticket.
+- The user is asking for writes or account changes.
+
 ## Required support flow
 
 ### Guardian lookup flow (mandatory)
@@ -112,6 +136,13 @@ For each lookup, return a compact support summary:
 - confidence signal (`single clear match` vs `multiple candidates`)
 - blocking gaps (`missing center hint`, `ambiguous guardian`, etc.)
 - next required input, if any
+
+For log search, return:
+
+- Codefac run status and `pipelineRunId`
+- final investigation report if completed
+- pending questions if Codefac asks for input
+- timeout/error message if no completed report is available
 
 ## Scope and safety
 
