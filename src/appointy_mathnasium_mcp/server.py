@@ -1899,13 +1899,19 @@ def _extract_payload_field(payload: Any, *names: str) -> str:
     if not isinstance(payload, dict):
         return ""
     candidates: List[Any] = []
+    lower_payload = {str(key).lower(): value for key, value in payload.items()}
     for name in names:
         candidates.append(payload.get(name))
+        candidates.append(payload.get(name.upper()))
+        candidates.append(lower_payload.get(name.lower()))
     for nested_key in ["request", "response", "data", "payload", "metadata", "error"]:
         nested = payload.get(nested_key)
         if isinstance(nested, dict):
+            lower_nested = {str(key).lower(): value for key, value in nested.items()}
             for name in names:
                 candidates.append(nested.get(name))
+                candidates.append(nested.get(name.upper()))
+                candidates.append(lower_nested.get(name.lower()))
     for value in candidates:
         text = _to_text(value)
         if text:
@@ -1932,12 +1938,14 @@ def _entry_to_dict(entry: Any, *, identifiers: List[str], include_payload: bool)
     message = _extract_payload_field(payload, "message", "status")
     error_message = _extract_payload_field(payload, "errorMessage", "error", "reason", "message")
     endpoint = _extract_payload_field(payload, "endpoint", "path", "url", "route", "operation", "method")
+    http_method = _extract_payload_field(payload, "httpMethod", "method")
 
     return {
         "timestamp": timestamp_text,
         "severity": _to_text(getattr(entry, "severity", "")),
         "message": message,
         "endpoint": endpoint,
+        "httpMethod": http_method,
         "identifierMatches": identifier_matches,
         "errorMessage": error_message if message.lower() != error_message.lower() else "",
         "insertId": _to_text(getattr(entry, "insert_id", "")),
