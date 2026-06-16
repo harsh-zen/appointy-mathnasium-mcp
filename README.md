@@ -16,7 +16,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_student`
 - `mathnasium_search_gcp_logs`
 
-## Data Source Notes
+## Data Source Notes:
 
 - `mathnasium_get_group_context` uses GraphQL `AppQuery`.
 - `mathnasium_find_center` uses cached GraphQL context index.
