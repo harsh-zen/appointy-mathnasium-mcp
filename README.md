@@ -46,7 +46,7 @@ Optional:
 - `CODEFAC_API_KEY`
 - `CODEFAC_PIPELINE_ID`
 - `CODEFAC_TIMEOUT_SECONDS` (default `30`)
-- `CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS` (default `240`)
+- `CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS` (default `360`)
 - `CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS` (default `5`)
 
 ## Tool Input Notes
@@ -63,7 +63,7 @@ Optional:
   - Accepts a natural-language `prompt`.
   - Prepends instructions telling Codefac not to post to Slack and to return the final investigation report as output.
   - Triggers `CODEFAC_PIPELINE_ID`, polls synchronously, and returns `success`, `failed`, `awaiting_input`, `awaiting_credentials`, or `timeout`.
-  - Optional `timeoutSeconds` is clamped to 30-300 seconds.
+  - Optional `timeoutSeconds` is clamped to 30-600 seconds.
 
 Transport/runtime (optional):
 

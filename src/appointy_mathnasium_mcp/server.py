@@ -82,7 +82,7 @@ CODEFAC_API_BASE_URL = os.getenv("CODEFAC_API_BASE_URL", "https://codefac.ai").r
 CODEFAC_API_KEY = os.getenv("CODEFAC_API_KEY")
 CODEFAC_PIPELINE_ID = os.getenv("CODEFAC_PIPELINE_ID")
 CODEFAC_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_TIMEOUT_SECONDS", 30)
-CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS", 240)
+CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS", 360)
 CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS", 5)
 
 
@@ -1879,7 +1879,7 @@ async def _run_codefac_log_search(
             "error": "prompt is required",
         }
 
-    timeout_seconds = max(30, min(timeout_seconds, 300))
+    timeout_seconds = max(30, min(timeout_seconds, 600))
     poll_interval_seconds = max(2, min(poll_interval_seconds, 15))
     work_item = _build_codefac_log_search_work_item(cleaned_prompt)
 
