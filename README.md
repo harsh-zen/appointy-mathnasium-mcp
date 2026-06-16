@@ -8,7 +8,7 @@ This MCP is an experimental support automation PoC.
 It is intentionally built on top of existing Appointy APIs as-is, without changing existing APIs and without introducing new backend wrapper endpoints.
 Behavior and response shapes can evolve as the underlying APIs evolve.
 
-## P0 Tools Implemented
+## P0 Tools Implemented:
 
 - `mathnasium_get_group_context`
 - `mathnasium_find_center`
