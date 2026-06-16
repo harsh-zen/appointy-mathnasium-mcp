@@ -17,12 +17,9 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-try:
-    from google.cloud import logging_v2
-except Exception:  # pragma: no cover - dependency/config surfaced at tool runtime
-    logging_v2 = None  # type: ignore[assignment]
-
 TransportType = Literal["stdio", "sse", "streamable-http"]
+logging_v2 = None
+logging_v2_import_error: Optional[Exception] = None
 
 
 def _bool_from_env(name: str, default: bool = False) -> bool:
@@ -444,8 +441,12 @@ def _ensure_google_credentials_file() -> Optional[str]:
 
 def _require_gcp_logging_config() -> Optional[Dict[str, Any]]:
     missing = []
+    _load_google_logging_client_module()
     if logging_v2 is None:
-        missing.append("google-cloud-logging dependency")
+        if logging_v2_import_error:
+            missing.append(f"google-cloud-logging dependency: {logging_v2_import_error}")
+        else:
+            missing.append("google-cloud-logging dependency")
     if not GCP_PROJECT_ID:
         missing.append("GCP_PROJECT_ID")
     if not GCP_LOG_LOCATION:
@@ -463,6 +464,20 @@ def _require_gcp_logging_config() -> Optional[Dict[str, Any]]:
             "missing": missing,
         }
     return None
+
+
+def _load_google_logging_client_module() -> Any:
+    global logging_v2, logging_v2_import_error
+    if logging_v2 is not None or logging_v2_import_error is not None:
+        return logging_v2
+    try:
+        from google.cloud import logging_v2 as loaded_logging_v2
+
+        logging_v2 = loaded_logging_v2
+    except Exception as exc:  # pragma: no cover - dependency/config surfaced at tool runtime
+        logging_v2_import_error = exc
+        logging_v2 = None
+    return logging_v2
 
 
 def _normalize_text(value: Optional[str]) -> str:
