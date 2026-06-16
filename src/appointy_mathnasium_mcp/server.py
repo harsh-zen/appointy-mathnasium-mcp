@@ -2107,7 +2107,7 @@ async def mathnasium_search_logs(
     timeoutSeconds: int = CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS,
     pollIntervalSeconds: int = CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS,
 ) -> Dict[str, Any]:
-    """Start a Codefac log/sync investigation and return a report if it finishes during the initial wait."""
+    """Start a Codefac log/sync investigation. Returns final output if complete, otherwise returns running with pipelineRunId for mathnasium_get_log_search_result."""
     config_error = _require_codefac_config()
     if config_error:
         return config_error
@@ -2132,7 +2132,7 @@ async def mathnasium_search_logs(
 
 @mcp.tool()
 async def mathnasium_get_log_search_result(pipelineRunId: str) -> Dict[str, Any]:
-    """Check a previously started Codefac log/sync investigation by pipelineRunId."""
+    """Fetch the current status or final output for a Codefac log/sync investigation started by mathnasium_search_logs."""
     config_error = _require_codefac_config()
     if config_error:
         return config_error
