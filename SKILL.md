@@ -14,6 +14,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_search_logs`
+- `mathnasium_get_log_search_result`
 
 ## When to use
 
@@ -83,7 +84,8 @@ Behavior:
 ### `mathnasium_search_logs`
 
 Purpose:
-- Run a synchronous outsourced log/sync investigation through the configured Codefac pipeline.
+- Start an outsourced log/sync investigation through the configured Codefac pipeline.
+- Return the final report if it completes during the initial wait, otherwise return a `pipelineRunId` for later follow-up.
 
 Use when:
 - Appointy entity lookup is not enough and the ticket requires backend logs, sync investigation, or Radius/Appointy sync failure evidence.
@@ -91,13 +93,31 @@ Use when:
 
 Input:
 - `prompt` is required and should be a natural-language investigation request with all known ticket context.
-- Optional `timeoutSeconds` controls how long to wait for the final report.
+- Optional `timeoutSeconds` controls the initial wait window. Default is short enough for interactive use.
 
 Behavior:
 - The MCP adds instructions telling Codefac not to post to Slack and to return only the final investigation report as pipeline output.
-- The tool blocks/polls until Codefac completes, fails, asks for input, or times out.
+- The tool polls during the initial wait window. If Codefac is still running, it returns `status: running` and a `pipelineRunId`.
 - If Codefac returns `awaiting_input`, surface `pendingQuestions` to the user/agent.
 - If Codefac returns `awaiting_credentials`, tell the operator that the Codefac provider sign-in/agent credentials need to be reconnected before log investigation can complete.
+
+If response is `running`:
+- Save the `pipelineRunId`.
+- Tell the user/operator that log investigation has started and is still running.
+- Call `mathnasium_get_log_search_result` later with the `pipelineRunId`.
+
+### `mathnasium_get_log_search_result`
+
+Purpose:
+- Check a previously started Codefac log/sync investigation.
+
+Input:
+- `pipelineRunId` from `mathnasium_search_logs`.
+
+Behavior:
+- If completed, returns `status: success` and `output`.
+- If still running, returns `status: running`.
+- If failed or paused, returns the Codefac state and error/pending question details.
 
 Do not use when:
 - A simple center/guardian/student lookup can answer the ticket.
@@ -142,9 +162,10 @@ For log search, return:
 
 - Codefac run status and `pipelineRunId`
 - final investigation report if completed
+- `running` status plus `pipelineRunId` if the investigation is still in progress
 - pending questions if Codefac asks for input
 - credential reconnect message if Codefac returns `awaiting_credentials`
-- timeout/error message if no completed report is available
+- error message if the run failed or cannot be checked
 
 ## Scope and safety
 

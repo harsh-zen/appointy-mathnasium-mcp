@@ -82,7 +82,7 @@ CODEFAC_API_BASE_URL = os.getenv("CODEFAC_API_BASE_URL", "https://codefac.ai").r
 CODEFAC_API_KEY = os.getenv("CODEFAC_API_KEY")
 CODEFAC_PIPELINE_ID = os.getenv("CODEFAC_PIPELINE_ID")
 CODEFAC_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_TIMEOUT_SECONDS", 30)
-CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS", 360)
+CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS", 120)
 CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS = _safe_int_from_env("CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS", 5)
 
 
@@ -1866,6 +1866,82 @@ def _build_codefac_log_search_work_item(prompt: str) -> str:
     )
 
 
+def _format_codefac_run_status(
+    run: Dict[str, Any],
+    *,
+    pipeline_run_id: str,
+    elapsed_seconds: Optional[float] = None,
+    poll_count: Optional[int] = None,
+    timed_out: bool = False,
+) -> Dict[str, Any]:
+    run_status = _to_text(run.get("status")).lower()
+    output = _to_text(_coalesce(run.get("output"), run.get("finalArtifact")))
+    base: Dict[str, Any] = {
+        "pipelineRunId": pipeline_run_id,
+        "pipelineId": _to_text(_coalesce(run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
+        "pipelineStatus": run_status or "unknown",
+        "completedStations": run.get("completedStations"),
+    }
+    if elapsed_seconds is not None:
+        base["elapsedSeconds"] = elapsed_seconds
+    if poll_count is not None:
+        base["pollCount"] = poll_count
+
+    if run_status == "completed":
+        return {
+            **base,
+            "status": "success",
+            "output": output,
+            "finalArtifact": _to_text(run.get("finalArtifact")),
+        }
+    if run_status in {"failed", "cancelled", "canceled", "error"}:
+        return {
+            **base,
+            "status": "failed",
+            "error": _to_text(_coalesce(run.get("errorMessage"), "Codefac pipeline failed")),
+            "output": output,
+        }
+    if run_status == "awaiting_input":
+        return {
+            **base,
+            "status": "awaiting_input",
+            "pendingQuestions": run.get("pendingQuestions"),
+        }
+    if run_status == "awaiting_credentials":
+        return {
+            **base,
+            "status": "awaiting_credentials",
+            "error": _to_text(
+                _coalesce(
+                    run.get("errorMessage"),
+                    "Codefac pipeline is waiting for provider credentials to be reconnected.",
+                )
+            ),
+        }
+
+    status = "running" if timed_out else (run_status or "running")
+    message = "Codefac investigation is still running. Call mathnasium_get_log_search_result with pipelineRunId to fetch the final report later."
+    if timed_out:
+        message = "Initial wait ended while Codefac investigation was still running. Call mathnasium_get_log_search_result with pipelineRunId to fetch the final report later."
+    return {
+        **base,
+        "status": status,
+        "message": message,
+        "output": output,
+    }
+
+
+async def _get_codefac_log_search_result(*, pipeline_run_id: str) -> Dict[str, Any]:
+    cleaned_run_id = _normalize_space(_to_text(pipeline_run_id))
+    if not cleaned_run_id:
+        return {
+            "status": "failed",
+            "error": "pipelineRunId is required",
+        }
+    run = await codefac.get_run(cleaned_run_id)
+    return _format_codefac_run_status(run, pipeline_run_id=cleaned_run_id)
+
+
 async def _run_codefac_log_search(
     *,
     prompt: str,
@@ -1879,7 +1955,7 @@ async def _run_codefac_log_search(
             "error": "prompt is required",
         }
 
-    timeout_seconds = max(30, min(timeout_seconds, 600))
+    timeout_seconds = max(0, min(timeout_seconds, 600))
     poll_interval_seconds = max(2, min(poll_interval_seconds, 15))
     work_item = _build_codefac_log_search_work_item(cleaned_prompt)
 
@@ -1899,74 +1975,27 @@ async def _run_codefac_log_search(
             "triggerStatus": trigger_payload.get("status"),
         }
 
-    last_run: Dict[str, Any] = {}
     poll_count = 0
     while True:
         poll_count += 1
-        last_run = await codefac.get_run(pipeline_run_id)
-        run_status = _to_text(last_run.get("status")).lower()
-        output = _to_text(_coalesce(last_run.get("output"), last_run.get("finalArtifact")))
+        run = await codefac.get_run(pipeline_run_id)
         elapsed_seconds = round(time.monotonic() - started_at, 3)
-
-        if run_status == "completed":
-            return {
-                "status": "success",
-                "pipelineRunId": pipeline_run_id,
-                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
-                "pipelineStatus": run_status,
-                "output": output,
-                "finalArtifact": _to_text(last_run.get("finalArtifact")),
-                "completedStations": last_run.get("completedStations"),
-                "elapsedSeconds": elapsed_seconds,
-                "pollCount": poll_count,
-            }
-        if run_status in {"failed", "cancelled", "canceled", "error"}:
-            return {
-                "status": "failed",
-                "pipelineRunId": pipeline_run_id,
-                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
-                "pipelineStatus": run_status,
-                "error": _to_text(_coalesce(last_run.get("errorMessage"), "Codefac pipeline failed")),
-                "output": output,
-                "elapsedSeconds": elapsed_seconds,
-                "pollCount": poll_count,
-            }
-        if run_status == "awaiting_input":
-            return {
-                "status": "awaiting_input",
-                "pipelineRunId": pipeline_run_id,
-                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
-                "pipelineStatus": run_status,
-                "pendingQuestions": last_run.get("pendingQuestions"),
-                "elapsedSeconds": elapsed_seconds,
-                "pollCount": poll_count,
-            }
-        if run_status == "awaiting_credentials":
-            return {
-                "status": "awaiting_credentials",
-                "pipelineRunId": pipeline_run_id,
-                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
-                "pipelineStatus": run_status,
-                "error": _to_text(
-                    _coalesce(
-                        last_run.get("errorMessage"),
-                        "Codefac pipeline is waiting for provider credentials to be reconnected.",
-                    )
-                ),
-                "elapsedSeconds": elapsed_seconds,
-                "pollCount": poll_count,
-            }
+        formatted = _format_codefac_run_status(
+            run,
+            pipeline_run_id=pipeline_run_id,
+            elapsed_seconds=elapsed_seconds,
+            poll_count=poll_count,
+        )
+        if formatted.get("status") not in {"running", "started", "queued", "pending", "in_progress", "unknown"}:
+            return formatted
         if elapsed_seconds >= timeout_seconds:
-            return {
-                "status": "timeout",
-                "pipelineRunId": pipeline_run_id,
-                "pipelineId": _to_text(_coalesce(last_run.get("pipelineId"), CODEFAC_PIPELINE_ID)),
-                "pipelineStatus": run_status or "unknown",
-                "output": output,
-                "error": f"Timed out after {timeout_seconds} seconds waiting for Codefac pipeline output.",
-                "elapsedSeconds": elapsed_seconds,
-                "pollCount": poll_count,
-            }
+            return _format_codefac_run_status(
+                run,
+                pipeline_run_id=pipeline_run_id,
+                elapsed_seconds=elapsed_seconds,
+                poll_count=poll_count,
+                timed_out=True,
+            )
 
         await asyncio.sleep(poll_interval_seconds)
 
@@ -2078,7 +2107,7 @@ async def mathnasium_search_logs(
     timeoutSeconds: int = CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS,
     pollIntervalSeconds: int = CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS,
 ) -> Dict[str, Any]:
-    """Run a synchronous Codefac log/sync investigation and return the final plain-text report."""
+    """Start a Codefac log/sync investigation and return a report if it finishes during the initial wait."""
     config_error = _require_codefac_config()
     if config_error:
         return config_error
@@ -2098,6 +2127,27 @@ async def mathnasium_search_logs(
         return {
             "status": "failed",
             "error": f"Unexpected error in Codefac log search: {exc}",
+        }
+
+
+@mcp.tool()
+async def mathnasium_get_log_search_result(pipelineRunId: str) -> Dict[str, Any]:
+    """Check a previously started Codefac log/sync investigation by pipelineRunId."""
+    config_error = _require_codefac_config()
+    if config_error:
+        return config_error
+    try:
+        return await _get_codefac_log_search_result(pipeline_run_id=pipelineRunId)
+    except CodefacApiError as exc:
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "details": exc.payload,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "error": f"Unexpected error while checking Codefac log search result: {exc}",
         }
 
 

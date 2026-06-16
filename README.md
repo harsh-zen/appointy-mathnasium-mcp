@@ -15,6 +15,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_search_logs`
+- `mathnasium_get_log_search_result`
 
 ## Data Source Notes
 
@@ -23,7 +24,8 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian` is GraphQL-first (`customers`) with guardian-student enrichment from `CustomerDetailQuery`.
 - `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
-- `mathnasium_search_logs` triggers the configured Codefac investigation pipeline, polls for completion, and returns the final plain-text report.
+- `mathnasium_search_logs` triggers the configured Codefac investigation pipeline, polls briefly, and returns either the final plain-text report or a `pipelineRunId` for later follow-up.
+- `mathnasium_get_log_search_result` checks a previously started Codefac investigation by `pipelineRunId`.
 
 ## Environment Variables
 
@@ -46,7 +48,7 @@ Optional:
 - `CODEFAC_API_KEY`
 - `CODEFAC_PIPELINE_ID`
 - `CODEFAC_TIMEOUT_SECONDS` (default `30`)
-- `CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS` (default `360`)
+- `CODEFAC_DEFAULT_POLL_TIMEOUT_SECONDS` (default `120`)
 - `CODEFAC_DEFAULT_POLL_INTERVAL_SECONDS` (default `5`)
 
 ## Tool Input Notes
@@ -62,8 +64,12 @@ Optional:
 - `mathnasium_search_logs`
   - Accepts a natural-language `prompt`.
   - Prepends instructions telling Codefac not to post to Slack and to return the final investigation report as output.
-  - Triggers `CODEFAC_PIPELINE_ID`, polls synchronously, and returns `success`, `failed`, `awaiting_input`, `awaiting_credentials`, or `timeout`.
-  - Optional `timeoutSeconds` is clamped to 30-600 seconds.
+  - Triggers `CODEFAC_PIPELINE_ID`, polls for the initial wait window, and returns `success`, `running`, `failed`, `awaiting_input`, or `awaiting_credentials`.
+  - If it returns `running`, save `pipelineRunId` and call `mathnasium_get_log_search_result` later.
+  - Optional `timeoutSeconds` is clamped to 0-600 seconds. Default is 120 seconds.
+- `mathnasium_get_log_search_result`
+  - Requires `pipelineRunId`.
+  - Returns current Codefac status or final report when complete.
 
 Transport/runtime (optional):
 
