@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import base64
 import json
 import logging
@@ -14,6 +15,11 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+try:
+    from google.cloud import logging_v2
+except Exception:  # pragma: no cover - dependency/config surfaced at tool runtime
+    logging_v2 = None  # type: ignore[assignment]
 
 TransportType = Literal["stdio", "sse", "streamable-http"]
 
@@ -77,6 +83,13 @@ GROUP_CONTEXT_CACHE_TTL_SECONDS = _safe_int_from_env("GROUP_CONTEXT_CACHE_TTL_SE
 APPOINTY_TIMEOUT_SECONDS = _safe_int_from_env("APPOINTY_TIMEOUT_SECONDS", 20)
 ENABLE_PII_MASKING = _bool_from_env("ENABLE_PII_MASKING", False)
 APPOINTY_BOOKING_URL_TEMPLATE = os.getenv("APPOINTY_BOOKING_URL_TEMPLATE", "https://www.appointy.com/{locationSlug}")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "waqt-prod")
+GCP_LOG_LOCATION = os.getenv("GCP_LOG_LOCATION", "europe-west1-c")
+GCP_CLUSTER_NAME = os.getenv("GCP_CLUSTER_NAME", "mathphase2-prod-gke")
+GCP_NAMESPACE = os.getenv("GCP_NAMESPACE", "prod")
+GCP_POD_APP_LABEL = os.getenv("GCP_POD_APP_LABEL", "deployment")
+GCP_LOG_DEFAULT_LOOKBACK_HOURS = _safe_int_from_env("GCP_LOG_DEFAULT_LOOKBACK_HOURS", 48)
+GCP_LOG_MAX_LIMIT = _safe_int_from_env("GCP_LOG_MAX_LIMIT", 200)
 
 
 GRAPHQL_APP_QUERY = """
@@ -412,6 +425,29 @@ def _require_config() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _require_gcp_logging_config() -> Optional[Dict[str, Any]]:
+    missing = []
+    if logging_v2 is None:
+        missing.append("google-cloud-logging dependency")
+    if not GCP_PROJECT_ID:
+        missing.append("GCP_PROJECT_ID")
+    if not GCP_LOG_LOCATION:
+        missing.append("GCP_LOG_LOCATION")
+    if not GCP_CLUSTER_NAME:
+        missing.append("GCP_CLUSTER_NAME")
+    if not GCP_NAMESPACE:
+        missing.append("GCP_NAMESPACE")
+    if not GCP_POD_APP_LABEL:
+        missing.append("GCP_POD_APP_LABEL")
+    if missing:
+        return {
+            "status": "failed",
+            "error": "Missing required Google Cloud Logging configuration",
+            "missing": missing,
+        }
+    return None
+
+
 def _normalize_text(value: Optional[str]) -> str:
     return (value or "").strip()
 
@@ -535,6 +571,33 @@ def _safe_json_dumps(value: Any) -> str:
         return _to_text(value)
 
 
+def _gcp_filter_string(value: Any) -> str:
+    text = _to_text(value)
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _normalize_log_timestamp(value: Optional[str], *, default: datetime) -> str:
+    if not value:
+        return default.isoformat().replace("+00:00", "Z")
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return default.isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _compact_payload(value: Any, *, include_payload: bool) -> Any:
+    if not include_payload:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return _to_text(value)
+
+
 def _decode_base64_json(value: Optional[str]) -> Dict[str, Any]:
     if not value:
         return {}
@@ -608,6 +671,12 @@ class AppointyApiError(Exception):
     def __init__(self, message: str, status_code: Optional[int] = None, payload: Any = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.payload = payload
+
+
+class GcpLoggingError(Exception):
+    def __init__(self, message: str, payload: Any = None) -> None:
+        super().__init__(message)
         self.payload = payload
 
 
@@ -822,6 +891,37 @@ class AppointyClient:
 
 
 appointy = AppointyClient()
+
+
+class GcpLoggingClient:
+    def __init__(self) -> None:
+        self.project_id = GCP_PROJECT_ID
+
+    def _list_entries_sync(self, *, filter_: str, limit: int) -> List[Any]:
+        error = _require_gcp_logging_config()
+        if error:
+            raise GcpLoggingError(error["error"], payload=error)
+        client = logging_v2.Client(project=self.project_id)  # type: ignore[union-attr]
+        return list(
+            client.list_entries(
+                resource_names=[f"projects/{self.project_id}"],
+                filter_=filter_,
+                order_by=logging_v2.DESCENDING,  # type: ignore[union-attr]
+                page_size=max(1, min(limit, GCP_LOG_MAX_LIMIT)),
+                max_results=max(1, min(limit, GCP_LOG_MAX_LIMIT)),
+            )
+        )
+
+    async def list_entries(self, *, filter_: str, limit: int) -> List[Any]:
+        try:
+            return await asyncio.to_thread(self._list_entries_sync, filter_=filter_, limit=limit)
+        except GcpLoggingError:
+            raise
+        except Exception as exc:
+            raise GcpLoggingError(f"Google Cloud Logging query failed: {exc}") from exc
+
+
+gcp_logging = GcpLoggingClient()
 
 _group_context_cache: Dict[str, Any] = {
     "expires_at": 0.0,
@@ -1751,6 +1851,156 @@ async def _find_centers_internal(*, query: Optional[str], include_inactive: bool
     return {"matches": matches}
 
 
+def _build_gcp_logs_filter(
+    *,
+    identifiers: List[str],
+    start_time: Optional[str],
+    end_time: Optional[str],
+    statuses: List[str],
+    endpoint_names: List[str],
+    severity_min: str,
+) -> Tuple[str, str, str]:
+    now = datetime.now(timezone.utc)
+    start_default = datetime.fromtimestamp(now.timestamp() - (GCP_LOG_DEFAULT_LOOKBACK_HOURS * 3600), tz=timezone.utc)
+    start = _normalize_log_timestamp(start_time, default=start_default)
+    end = _normalize_log_timestamp(end_time, default=now)
+
+    filter_parts = [
+        'resource.type="k8s_container"',
+        f'resource.labels.project_id="{_gcp_filter_string(GCP_PROJECT_ID)}"',
+        f'resource.labels.location="{_gcp_filter_string(GCP_LOG_LOCATION)}"',
+        f'resource.labels.cluster_name="{_gcp_filter_string(GCP_CLUSTER_NAME)}"',
+        f'resource.labels.namespace_name="{_gcp_filter_string(GCP_NAMESPACE)}"',
+        f'labels."k8s-pod/app"="{_gcp_filter_string(GCP_POD_APP_LABEL)}"',
+        f"severity>={_gcp_filter_string(severity_min or 'DEFAULT')}",
+        f'timestamp>="{start}"',
+        f'timestamp<="{end}"',
+    ]
+
+    status_values = [value for value in [_normalize_space(_to_text(s)) for s in statuses] if value]
+    if status_values:
+        status_filter = " OR ".join([f'jsonPayload.message="{_gcp_filter_string(status)}"' for status in status_values])
+        filter_parts.append(f"({status_filter})")
+
+    identifier_values = [value for value in [_normalize_space(_to_text(i)) for i in identifiers] if value]
+    if identifier_values:
+        identifier_filter = " OR ".join([f'"{_gcp_filter_string(identifier)}"' for identifier in identifier_values])
+        filter_parts.append(f"({identifier_filter})")
+
+    endpoint_values = [value for value in [_normalize_space(_to_text(e)) for e in endpoint_names] if value]
+    if endpoint_values:
+        endpoint_filter = " OR ".join([f'"{_gcp_filter_string(endpoint)}"' for endpoint in endpoint_values])
+        filter_parts.append(f"({endpoint_filter})")
+
+    return "\n".join(filter_parts), start, end
+
+
+def _extract_payload_field(payload: Any, *names: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    candidates: List[Any] = []
+    for name in names:
+        candidates.append(payload.get(name))
+    for nested_key in ["request", "response", "data", "payload", "metadata", "error"]:
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            for name in names:
+                candidates.append(nested.get(name))
+    for value in candidates:
+        text = _to_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _entry_to_dict(entry: Any, *, identifiers: List[str], include_payload: bool) -> Dict[str, Any]:
+    payload = getattr(entry, "payload", None)
+    timestamp = getattr(entry, "timestamp", None)
+    if isinstance(timestamp, datetime):
+        timestamp_text = timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    else:
+        timestamp_text = _to_text(timestamp)
+    payload_text = _safe_json_dumps(payload).lower()
+    identifier_matches = [
+        identifier
+        for identifier in identifiers
+        if identifier and identifier.lower() in payload_text
+    ]
+    resource = getattr(entry, "resource", None)
+    resource_labels = getattr(resource, "labels", {}) if resource is not None else {}
+    labels = getattr(entry, "labels", {}) or {}
+    message = _extract_payload_field(payload, "message", "status")
+    error_message = _extract_payload_field(payload, "errorMessage", "error", "reason", "message")
+    endpoint = _extract_payload_field(payload, "endpoint", "path", "url", "route", "operation", "method")
+
+    return {
+        "timestamp": timestamp_text,
+        "severity": _to_text(getattr(entry, "severity", "")),
+        "message": message,
+        "endpoint": endpoint,
+        "identifierMatches": identifier_matches,
+        "errorMessage": error_message if message.lower() != error_message.lower() else "",
+        "insertId": _to_text(getattr(entry, "insert_id", "")),
+        "logName": _to_text(getattr(entry, "log_name", "")),
+        "resourceLabels": dict(resource_labels) if isinstance(resource_labels, dict) else {},
+        "labels": dict(labels) if isinstance(labels, dict) else {},
+        "payload": _compact_payload(payload, include_payload=include_payload),
+    }
+
+
+async def _search_gcp_logs_internal(
+    *,
+    identifiers: List[str],
+    start_time: Optional[str],
+    end_time: Optional[str],
+    statuses: List[str],
+    endpoint_names: List[str],
+    severity_min: str,
+    limit: int,
+    include_payload: bool,
+) -> Dict[str, Any]:
+    identifier_values = [value for value in [_normalize_space(_to_text(i)) for i in identifiers] if value]
+    if not identifier_values:
+        return {
+            "status": "failed",
+            "error": "At least one identifier is required.",
+            "matches": [],
+        }
+
+    limit = max(1, min(limit, GCP_LOG_MAX_LIMIT))
+    query, resolved_start, resolved_end = _build_gcp_logs_filter(
+        identifiers=identifier_values,
+        start_time=start_time,
+        end_time=end_time,
+        statuses=statuses or ["Successful", "Failed"],
+        endpoint_names=endpoint_names or [],
+        severity_min=severity_min or "DEFAULT",
+    )
+    entries = await gcp_logging.list_entries(filter_=query, limit=limit)
+    matches = [_entry_to_dict(entry, identifiers=identifier_values, include_payload=include_payload) for entry in entries]
+    successful = sum(1 for row in matches if _to_text(row.get("message")).lower() == "successful")
+    failed = sum(1 for row in matches if _to_text(row.get("message")).lower() == "failed")
+    timestamps = [row.get("timestamp") for row in matches if row.get("timestamp")]
+    return {
+        "status": "success",
+        "queryUsed": query,
+        "timeRange": {
+            "startTime": resolved_start,
+            "endTime": resolved_end,
+        },
+        "matches": matches,
+        "summary": {
+            "total": len(matches),
+            "successful": successful,
+            "failed": failed,
+            "earliest": min(timestamps) if timestamps else "",
+            "latest": max(timestamps) if timestamps else "",
+            "limit": limit,
+        },
+        "warnings": [],
+    }
+
+
 @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
 async def health_check(_: Request) -> JSONResponse:
     return JSONResponse(
@@ -1850,6 +2100,47 @@ async def mathnasium_find_center(
         )
     except AppointyApiError as exc:
         return {"matches": [], "warnings": [str(exc)]}
+
+
+@mcp.tool()
+async def mathnasium_search_gcp_logs(
+    identifiers: List[str],
+    startTime: Optional[str] = None,
+    endTime: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+    endpointNames: Optional[List[str]] = None,
+    severityMin: str = "DEFAULT",
+    limit: int = 100,
+    includePayload: bool = True,
+) -> Dict[str, Any]:
+    """Search Appointy M production GKE Cloud Logging entries by identifiers/timeframe for Mathnasium Radius wrapper activity."""
+    config_error = _require_gcp_logging_config()
+    if config_error:
+        return config_error
+    try:
+        return await _search_gcp_logs_internal(
+            identifiers=identifiers or [],
+            start_time=startTime,
+            end_time=endTime,
+            statuses=statuses or ["Successful", "Failed"],
+            endpoint_names=endpointNames or [],
+            severity_min=severityMin,
+            limit=limit,
+            include_payload=includePayload,
+        )
+    except GcpLoggingError as exc:
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "details": exc.payload,
+            "matches": [],
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "error": f"Unexpected error in GCP log search: {exc}",
+            "matches": [],
+        }
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

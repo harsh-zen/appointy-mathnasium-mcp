@@ -13,6 +13,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_center`
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
+- `mathnasium_search_gcp_logs`
 
 ## When to use
 
@@ -22,6 +23,7 @@ Use this skill when a support workflow needs:
 - guardian account lookup
 - student lookup and enrollment visibility
 - mapping ticket text to valid Appointy entities
+- production GCP log retrieval for Radius/Appointy sync investigation
 
 ## Tool contracts
 
@@ -78,6 +80,33 @@ Behavior:
 - Best filters: `studentName`, `guardianId`, `centerId`.
 - `guardianEmail` alone is weak; prefer `guardianId`.
 
+
+### `mathnasium_search_gcp_logs`
+
+Purpose:
+- Retrieve Appointy M production GKE logs for Mathnasium Radius wrapper endpoint activity.
+- This tool searches logs only; the agent must interpret the results.
+
+Use when:
+- The support request asks to check logs or sync failures.
+- Appointy lookup cannot explain whether Radius data reached Appointy.
+- You have identifiers such as email, Radius ID, custom ID, Appointy guardian/student/company/location ID, or endpoint text.
+
+Input:
+- `identifiers` is required and should include every known email/id/name fragment relevant to the sync issue.
+- `startTime` and `endTime` should be ISO timestamps when the ticket gives an approximate timeframe.
+- `statuses` defaults to `Successful` and `Failed`.
+- `endpointNames` can narrow to wrapper names such as `customer-account`, `student`, or `appointment`.
+- `limit` should stay small first, then increase only if needed.
+
+Output:
+- `matches` contains normalized log entries.
+- `summary.successful` and `summary.failed` count wrapper success/failure messages.
+- `queryUsed` shows the exact Cloud Logging filter for audit/debugging.
+
+Investigation tip:
+- If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
+
 ## Required support flow
 
 ### Guardian lookup flow (mandatory)
@@ -98,6 +127,14 @@ If no center/location hint is present:
 2. If multiple matches, narrow with `centerId` and guardian linkage.
 3. Use enrollments and status fields for support reasoning.
 
+### Log lookup flow
+
+1. Extract identifiers and timeframe from the Slack/ticket request.
+2. Resolve extra IDs with center/guardian/student tools if useful.
+3. Call `mathnasium_search_gcp_logs` with all known identifiers and the timeframe.
+4. If current-window logs show success but the issue says data was missing, search farther back for earlier failures.
+5. Use the returned logs as evidence for the final support explanation.
+
 ## Disambiguation rules
 
 - If multiple centers match: ask a center confirmation question before guardian lookup.
@@ -112,6 +149,14 @@ For each lookup, return a compact support summary:
 - confidence signal (`single clear match` vs `multiple candidates`)
 - blocking gaps (`missing center hint`, `ambiguous guardian`, etc.)
 - next required input, if any
+
+For log lookup, return:
+
+- identifiers searched
+- timeframe searched
+- count of successful and failed log entries
+- relevant errors or dropped payload clues
+- whether a broader/earlier search is needed
 
 ## Scope and safety
 
