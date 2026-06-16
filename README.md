@@ -42,7 +42,8 @@ Optional:
 - `APPOINTY_TIMEOUT_SECONDS` (default `20`)
 - `ENABLE_PII_MASKING` (default `false`)
 - `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://www.appointy.com/{locationSlug}`)
-- `GOOGLE_APPLICATION_CREDENTIALS` (path to service account key, or use ADC/workload identity)
+- `GOOGLE_APPLICATION_CREDENTIALS_JSON` (preferred deployed secret containing the service account JSON)
+- `GOOGLE_APPLICATION_CREDENTIALS` (local path to service account key, or use ADC/workload identity)
 - `GCP_PROJECT_ID` (default `waqt-prod`)
 - `GCP_LOG_LOCATION` (default `europe-west1-c`)
 - `GCP_CLUSTER_NAME` (default `mathphase2-prod-gke`)
@@ -112,6 +113,7 @@ docker run --rm -p 8080:8080 \
   -e APPOINTY_API_KEY \
   -e MATHNASIUM_GROUP_ID \
   -e MATHNASIUM_COMPANY_ID_OPTIONAL \
+  -e GOOGLE_APPLICATION_CREDENTIALS_JSON \
   -e GOOGLE_APPLICATION_CREDENTIALS \
   -e GCP_PROJECT_ID \
   appointy-mathnasium-mcp

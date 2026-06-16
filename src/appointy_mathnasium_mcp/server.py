@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -83,6 +84,7 @@ GROUP_CONTEXT_CACHE_TTL_SECONDS = _safe_int_from_env("GROUP_CONTEXT_CACHE_TTL_SE
 APPOINTY_TIMEOUT_SECONDS = _safe_int_from_env("APPOINTY_TIMEOUT_SECONDS", 20)
 ENABLE_PII_MASKING = _bool_from_env("ENABLE_PII_MASKING", False)
 APPOINTY_BOOKING_URL_TEMPLATE = os.getenv("APPOINTY_BOOKING_URL_TEMPLATE", "https://www.appointy.com/{locationSlug}")
+GOOGLE_APPLICATION_CREDENTIALS_JSON = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "waqt-prod")
 GCP_LOG_LOCATION = os.getenv("GCP_LOG_LOCATION", "europe-west1-c")
 GCP_CLUSTER_NAME = os.getenv("GCP_CLUSTER_NAME", "mathphase2-prod-gke")
@@ -423,6 +425,21 @@ def _require_config() -> Optional[Dict[str, Any]]:
             "missing": missing,
         }
     return None
+
+
+def _ensure_google_credentials_file() -> Optional[str]:
+    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        return os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if not GOOGLE_APPLICATION_CREDENTIALS_JSON:
+        return None
+
+    credentials_path = os.path.join(tempfile.gettempdir(), "appointy_mathnasium_gcp_credentials.json")
+    if not os.path.exists(credentials_path):
+        with open(credentials_path, "w", encoding="utf-8") as handle:
+            handle.write(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+        os.chmod(credentials_path, 0o600)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+    return credentials_path
 
 
 def _require_gcp_logging_config() -> Optional[Dict[str, Any]]:
@@ -898,6 +915,7 @@ class GcpLoggingClient:
         self.project_id = GCP_PROJECT_ID
 
     def _list_entries_sync(self, *, filter_: str, limit: int) -> List[Any]:
+        _ensure_google_credentials_file()
         error = _require_gcp_logging_config()
         if error:
             raise GcpLoggingError(error["error"], payload=error)
