@@ -15,6 +15,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
 - `mathnasium_search_gcp_logs`
+- `mathnasium_search_custom_logs`
 
 ## When to use
 
@@ -26,6 +27,7 @@ Use this skill when a support workflow needs:
 - appointments, services/session types, instructors/employees, resources, settings, or app-module lookup
 - mapping ticket text to valid Appointy entities
 - production GCP log retrieval for Radius/Appointy sync investigation
+- custom production log search by exact queryId, path, error text, or internal code-log phrase
 
 ## Tool contracts
 
@@ -148,6 +150,39 @@ Output:
 Investigation tip:
 - If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
 
+### `mathnasium_search_custom_logs`
+
+Purpose:
+- Search Mathnasium production GKE logs using custom filters without writing raw Cloud Logging syntax.
+- Use when the standard Radius wrapper log search is too narrow.
+
+Use when:
+- The support request mentions a frontend/backend GraphQL `queryId`.
+- You need Admin request logs for a path or status code.
+- Ohara/code context reveals an exact internal log phrase.
+- You need to search a specific error text, endpoint name, entity ID, or mixed set of terms.
+
+Source presets:
+- `all`: no source-specific preset beyond Mathnasium GKE app logs.
+- `admin_requests`: filters to `mathnasium-admin.appointy.com` request logs.
+- `graphql`: filters toward GraphQL finished/error request logs.
+- `radius_wrappers`: filters toward wrapper `Successful`/`Failed` logs.
+
+Inputs:
+- `textTerms`: exact text snippets or internal log phrases.
+- `identifiers`: emails, Appointy IDs, Radius IDs, custom IDs, names, etc.
+- `messages`: exact `jsonPayload.message` values such as `Finished request` or `Error while processing request`.
+- `queryIds`: GraphQL operation/query IDs such as `CompanyAppointmentReportQuery`.
+- `paths`: request path fragments such as `/graphql` or `/api/v1/...`.
+- `endpointNames`: endpoint fragments such as `customer-account`.
+- `statusCodes`: status text/values when present in payloads.
+- `matchAllTerms`: set true when every provided text/path/id/query term must be present.
+
+Examples:
+- GraphQL query trace: `source="graphql"`, `queryIds=["AppointmentQuery"]`, include timeframe.
+- Admin path trace: `source="admin_requests"`, `paths=["/graphql"]`, `statusCodes=["403"]`, include timeframe.
+- Internal code log: `source="all"`, `textTerms=["Total number of rows"]`, add identifiers/timeframe.
+
 ## Required support flow
 
 ### Guardian lookup flow (mandatory)
@@ -180,9 +215,10 @@ If no center/location hint is present:
 
 1. Extract identifiers and timeframe from the Slack/ticket request.
 2. Resolve extra IDs with center/guardian/student tools if useful.
-3. Call `mathnasium_search_gcp_logs` with all known identifiers and the timeframe.
-4. If current-window logs show success but the issue says data was missing, search farther back for earlier failures.
-5. Use the returned logs as evidence for the final support explanation.
+3. For Radius wrapper sync failures, call `mathnasium_search_gcp_logs`.
+4. For GraphQL/queryId/path/internal-log investigations, call `mathnasium_search_custom_logs`.
+5. If current-window logs show success but the issue says data was missing, search farther back for earlier failures.
+6. Use the returned logs as evidence for the final support explanation.
 
 ## Disambiguation rules
 
