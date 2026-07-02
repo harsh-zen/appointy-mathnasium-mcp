@@ -98,17 +98,56 @@ query AppQuery {
     groups {
       id
       name
+      groupSettings {
+        id
+        adminCss
+        metadata
+        hasExtendedFields
+      }
       companies {
         id
         title
         displayName
+        profession
         active
         customCompanyId
+        preference {
+          currency
+          dateFormat
+          language
+          timeFormat
+          timezone
+          uiInfo
+          id
+        }
+        metadata
+        address {
+          country
+          latitude
+          locality
+          longitude
+          postalCode
+          region
+          streetAddress
+        }
         slugObject {
+          id
+          slugType
           slugValue
         }
         companySettings {
+          id
+          navMenus
           aliases(locale: "en-US")
+          customization {
+            disableApps
+            disableStaffBooking
+          }
+        }
+        roleLevelCustomization {
+          disableApps
+          readonlyApps
+          id
         }
         apps {
           id
@@ -125,11 +164,31 @@ query AppQuery {
               customLocationId
               active
               preference {
+                currency
+                dateFormat
+                language
+                timeFormat
                 timezone
+                uiInfo
+                id
               }
               slugObject {
+                id
+                slugType
                 slugValue
               }
+              address {
+                country
+                latitude
+                locality
+                longitude
+                postalCode
+                region
+                streetAddress
+              }
+              telephones
+              description
+              metadata
             }
           }
         }
@@ -392,6 +451,86 @@ query StudentDetailQuery($id: ID!) {
   }
 }
 """.strip()
+
+GRAPHQL_OTHER_ENTITY_QUERIES: Dict[str, Tuple[str, str, str]] = {
+    "appointments": (
+        "MathnasiumEntityAppointmentsQuery",
+        "appointments",
+        """
+query MathnasiumEntityAppointmentsQuery($parent: String!, $first: Int!) {
+  appointments(parent: $parent, first: $first) {
+    edges {
+      node {
+        id
+        status
+        paymentStatus
+        timeSlot {
+          startTime
+          endTime
+        }
+      }
+    }
+  }
+}
+""".strip(),
+    ),
+    "services": (
+        "MathnasiumEntityServicesQuery",
+        "services",
+        """
+query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
+  services(parent: $parent, first: $first) {
+    edges {
+      node {
+        id
+        title
+        description
+        active
+      }
+    }
+  }
+}
+""".strip(),
+    ),
+    "employees": (
+        "MathnasiumEntityEmployeesQuery",
+        "employees",
+        """
+query MathnasiumEntityEmployeesQuery($parent: String!, $first: Int!) {
+  employees(parent: $parent, first: $first) {
+    edges {
+      node {
+        id
+        firstName
+        lastName
+        email
+        phoneNumber
+        active
+      }
+    }
+  }
+}
+""".strip(),
+    ),
+    "resources": (
+        "MathnasiumEntityResourcesQuery",
+        "resources",
+        """
+query MathnasiumEntityResourcesQuery($parent: String!, $first: Int!) {
+  resources(parent: $parent, first: $first) {
+    edges {
+      node {
+        id
+        title
+        description
+        active
+      }
+    }
+  }
+}
+""".strip(),
+    ),
+}
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1086,6 +1225,43 @@ async def _get_group_context_cached(refresh: bool = False) -> Dict[str, Any]:
     _group_context_cache["normalized"] = normalized
     _group_context_cache["expires_at"] = now + max(60, GROUP_CONTEXT_CACHE_TTL_SECONDS)
     return normalized
+
+
+async def _get_group_context_raw_cached(refresh: bool = False) -> Dict[str, Any]:
+    now = time.time()
+    if not refresh and _group_context_cache.get("raw") and now < _group_context_cache.get("expires_at", 0.0):
+        raw = _group_context_cache.get("raw")
+        return raw if isinstance(raw, dict) else {}
+    await _get_group_context_cached(refresh=refresh)
+    raw = _group_context_cache.get("raw")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _raw_mathnasium_group(raw: Dict[str, Any]) -> Dict[str, Any]:
+    viewer = (((raw or {}).get("data") or {}).get("viewer") or {}) if isinstance(raw, dict) else {}
+    groups = viewer.get("groups") if isinstance(viewer.get("groups"), list) else []
+    for group in groups:
+        if _to_text(group.get("id")) == MATHNASIUM_GROUP_ID:
+            return group if isinstance(group, dict) else {}
+    return groups[0] if groups and isinstance(groups[0], dict) else {}
+
+
+def _raw_company_by_id(group: Dict[str, Any], company_id: str) -> Dict[str, Any]:
+    target = _to_text(company_id)
+    for company in _listify(group.get("companies")):
+        if isinstance(company, dict) and _to_text(company.get("id")) == target:
+            return company
+    return {}
+
+
+def _raw_location_by_id(company: Dict[str, Any], location_id: str) -> Dict[str, Any]:
+    target = _to_text(location_id)
+    locations_connection = company.get("locations") if isinstance(company, dict) else {}
+    for edge in _listify((locations_connection or {}).get("edges") if isinstance(locations_connection, dict) else []):
+        node = edge.get("node") if isinstance(edge, dict) else {}
+        if isinstance(node, dict) and _to_text(node.get("id")) == target:
+            return node
+    return {}
 
 
 def _is_in_mathnasium_group(entity_id: str) -> bool:
@@ -1884,6 +2060,146 @@ async def _find_centers_internal(*, query: Optional[str], include_inactive: bool
     return {"matches": matches}
 
 
+async def _get_context_entity_internal(
+    *,
+    entity_type: str,
+    company_id: Optional[str],
+    location_id: Optional[str],
+    refresh: bool,
+) -> Dict[str, Any]:
+    raw = await _get_group_context_raw_cached(refresh=refresh)
+    group = _raw_mathnasium_group(raw)
+    if not group:
+        return {"status": "failed", "error": "Mathnasium group context was not found."}
+
+    if entity_type == "group_settings":
+        return {
+            "status": "success",
+            "entityType": entity_type,
+            "source": "graphql:AppQuery",
+            "data": {
+                "groupId": _to_text(group.get("id")),
+                "groupName": _to_text(group.get("name")),
+                "groupSettings": group.get("groupSettings") or {},
+            },
+        }
+
+    if not company_id:
+        return {"status": "failed", "error": f"{entity_type} requires companyId."}
+
+    company = _raw_company_by_id(group, company_id)
+    if not company:
+        return {"status": "failed", "error": f"Company not found for companyId={company_id}."}
+
+    if entity_type == "company_settings":
+        company_settings = company.get("companySettings") if isinstance(company.get("companySettings"), dict) else {}
+        return {
+            "status": "success",
+            "entityType": entity_type,
+            "source": "graphql:AppQuery",
+            "data": {
+                "companyId": _to_text(company.get("id")),
+                "displayName": _to_text(_coalesce(company.get("displayName"), company.get("title"))),
+                "customCompanyId": _to_text(company.get("customCompanyId")),
+                "active": bool(_coalesce(company.get("active"), True)),
+                "preference": company.get("preference") or {},
+                "companySettings": company_settings,
+                "aliases": _decode_base64_json(company_settings.get("aliases")) if isinstance(company_settings.get("aliases"), str) else {},
+                "roleLevelCustomization": company.get("roleLevelCustomization"),
+                "apps": _listify(company.get("apps")),
+                "metadata": company.get("metadata"),
+            },
+        }
+
+    if entity_type == "apps":
+        return {
+            "status": "success",
+            "entityType": entity_type,
+            "source": "graphql:AppQuery",
+            "data": {
+                "companyId": _to_text(company.get("id")),
+                "apps": _listify(company.get("apps")),
+            },
+        }
+
+    if entity_type == "location_settings":
+        if not location_id:
+            return {"status": "failed", "error": "location_settings requires locationId."}
+        location = _raw_location_by_id(company, location_id)
+        if not location:
+            return {"status": "failed", "error": f"Location not found for locationId={location_id}."}
+        return {
+            "status": "success",
+            "entityType": entity_type,
+            "source": "graphql:AppQuery",
+            "data": {
+                "companyId": _to_text(company.get("id")),
+                "locationId": _to_text(location.get("id")),
+                "name": _to_text(location.get("name")),
+                "customLocationId": _to_text(location.get("customLocationId")),
+                "active": bool(_coalesce(location.get("active"), True)),
+                "preference": location.get("preference") or {},
+                "slugObject": location.get("slugObject") or {},
+                "address": location.get("address") or {},
+                "telephones": _listify(location.get("telephones")),
+                "metadata": location.get("metadata"),
+            },
+        }
+
+    return {"status": "failed", "error": f"Unsupported context entity type: {entity_type}"}
+
+
+async def _get_graphql_entity_internal(
+    *,
+    entity_type: str,
+    parent_id: str,
+    company_id: Optional[str],
+    location_id: Optional[str],
+    entity_id: Optional[str],
+    limit: int,
+) -> Dict[str, Any]:
+    query_spec = GRAPHQL_OTHER_ENTITY_QUERIES.get(entity_type)
+    if not query_spec:
+        return {"status": "failed", "error": f"Unsupported GraphQL entity type: {entity_type}"}
+    if not parent_id:
+        return {"status": "failed", "error": f"{entity_type} requires parentId."}
+
+    query_id, connection_name, query = query_spec
+    payload = await appointy._graphql(
+        query_id=query_id,
+        query=query,
+        variables={"parent": parent_id, "first": max(1, min(limit, 100))},
+        company_id=company_id or _company_prefix_from_entity_id(parent_id),
+        location_id=location_id if location_id else (parent_id if "/loc_" in parent_id else None),
+        use_default_company_scope=False,
+    )
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    connection = data.get(connection_name) if isinstance(data, dict) else {}
+    edges = connection.get("edges") if isinstance(connection, dict) else []
+    items = []
+    for edge in _listify(edges):
+        node = edge.get("node") if isinstance(edge, dict) else {}
+        if not isinstance(node, dict):
+            continue
+        if entity_id and _to_text(node.get("id")) != _to_text(entity_id):
+            continue
+        items.append(node)
+
+    return {
+        "status": "success" if not errors else "partial",
+        "entityType": entity_type,
+        "source": f"graphql:{query_id}",
+        "parentId": parent_id,
+        "entityId": entity_id or "",
+        "items": items,
+        "rawErrors": errors,
+        "warnings": [
+            "This common lookup does exact entity-type/parent/id based reads only; it does not fuzzy-search names or infer missing scope."
+        ],
+    }
+
+
 def _build_gcp_logs_filter(
     *,
     identifiers: List[str],
@@ -2141,6 +2457,51 @@ async def mathnasium_find_center(
         )
     except AppointyApiError as exc:
         return {"matches": [], "warnings": [str(exc)]}
+
+
+@mcp.tool()
+async def mathnasium_get_entity(
+    entityType: Literal[
+        "appointments",
+        "services",
+        "employees",
+        "resources",
+        "group_settings",
+        "company_settings",
+        "location_settings",
+        "apps",
+    ],
+    parentId: Optional[str] = None,
+    entityId: Optional[str] = None,
+    companyId: Optional[str] = None,
+    locationId: Optional[str] = None,
+    limit: int = 25,
+    refreshContext: bool = False,
+) -> Dict[str, Any]:
+    """Get exact scoped Mathnasium entities not covered by center/guardian/student tools, such as appointments, services, employees, resources, settings, and apps."""
+    config_error = _require_config()
+    if config_error:
+        return config_error
+    try:
+        if entityType in {"group_settings", "company_settings", "location_settings", "apps"}:
+            return await _get_context_entity_internal(
+                entity_type=entityType,
+                company_id=companyId,
+                location_id=locationId,
+                refresh=refreshContext,
+            )
+        return await _get_graphql_entity_internal(
+            entity_type=entityType,
+            parent_id=parentId or "",
+            company_id=companyId,
+            location_id=locationId,
+            entity_id=entityId,
+            limit=max(1, min(limit, 100)),
+        )
+    except AppointyApiError as exc:
+        return {"status": "failed", "error": str(exc), "details": exc.payload}
+    except Exception as exc:
+        return {"status": "failed", "error": f"Unexpected error in entity lookup: {exc}"}
 
 
 @mcp.tool()

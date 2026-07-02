@@ -14,6 +14,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_center`
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
+- `mathnasium_get_entity`
 - `mathnasium_search_gcp_logs`
 
 ## Data Source Notes:
@@ -22,6 +23,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_center` uses cached GraphQL context index.
 - `mathnasium_find_guardian` is GraphQL-first (`customers`) with guardian-student enrichment from `CustomerDetailQuery`.
 - `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
+- `mathnasium_get_entity` is a common read-only entity lookup for objects not covered by the first-class center/guardian/student tools.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
 - `mathnasium_search_gcp_logs` uses Google Cloud Logging to search Appointy M production GKE logs for Mathnasium Radius wrapper activity.
 
@@ -62,6 +64,15 @@ Optional:
   - Uses group-level student search (`MATHNASIUM_GROUP_ID`) directly.
   - `guardianId` is supported as a direct filter.
   - `guardianEmail` is only a hint and is ignored unless `guardianId` is also provided.
+- `mathnasium_get_entity`
+  - Use for exact scoped reads of entities not covered by center/guardian/student tools.
+  - Supported `entityType` values: `appointments`, `services`, `employees`, `resources`, `group_settings`, `company_settings`, `location_settings`, `apps`.
+  - For `appointments`, `services`, and `resources`, pass a location-level `parentId`.
+  - For `employees`, pass a company-level `parentId`.
+  - For `company_settings` and `apps`, pass `companyId`.
+  - For `location_settings`, pass both `companyId` and `locationId`.
+  - Optional `entityId` filters exact IDs from returned list results; no fuzzy name matching is performed.
+  - This intentionally does not replace `mathnasium_find_center`, `mathnasium_find_guardian`, or `mathnasium_find_student`.
 - `mathnasium_search_gcp_logs`
   - Requires `identifiers` such as guardian/student email, Radius ID, custom ID, Appointy ID, company/location ID, or endpoint text.
   - Accepts optional `startTime` and `endTime` as ISO timestamps; defaults to the last configured lookback window.

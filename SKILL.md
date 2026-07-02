@@ -13,6 +13,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_center`
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
+- `mathnasium_get_entity`
 - `mathnasium_search_gcp_logs`
 
 ## When to use
@@ -22,6 +23,7 @@ Use this skill when a support workflow needs:
 - center/company/location identification
 - guardian account lookup
 - student lookup and enrollment visibility
+- appointments, services/session types, instructors/employees, resources, settings, or app-module lookup
 - mapping ticket text to valid Appointy entities
 - production GCP log retrieval for Radius/Appointy sync investigation
 
@@ -81,6 +83,45 @@ Behavior:
 - `guardianEmail` alone is weak; prefer `guardianId`.
 
 
+### `mathnasium_get_entity`
+
+Purpose:
+- Common read-only lookup for exact scoped entities not covered by the dedicated center/guardian/student tools.
+- Use this for Appointy objects like appointments, services/session types, employees/instructors, resources, settings, and apps.
+
+Supported `entityType` values:
+- `appointments`
+- `services`
+- `employees`
+- `resources`
+- `group_settings`
+- `company_settings`
+- `location_settings`
+- `apps`
+
+Scope rules:
+- For `appointments`, `services`, and `resources`, provide a location-level `parentId`.
+- For `employees`, provide a company-level `parentId`.
+- For `company_settings` and `apps`, provide `companyId`.
+- For `location_settings`, provide both `companyId` and `locationId`.
+- For `group_settings`, no scope ID is needed.
+
+Optional exact filter:
+- `entityId` filters exact IDs from returned list results.
+- Do not use this tool for fuzzy name matching.
+- Do not use this tool to find centers, guardians, or students. Use the dedicated tools for those.
+
+Returns:
+- `items` for list-like entities (`appointments`, `services`, `employees`, `resources`).
+- `data` for settings/app entities.
+- `source`, showing the internal GraphQL query used.
+
+Examples:
+- To inspect appointments at a center: use `entityType="appointments"` and `parentId=<locationId>`.
+- To inspect session types at a center: use `entityType="services"` and `parentId=<locationId>`.
+- To inspect instructors for a center owner: use `entityType="employees"` and `parentId=<companyId>`.
+- To inspect center settings: use `entityType="location_settings"`, `companyId=<companyId>`, and `locationId=<locationId>`.
+
 ### `mathnasium_search_gcp_logs`
 
 Purpose:
@@ -126,6 +167,14 @@ If no center/location hint is present:
 1. Run `mathnasium_find_student` with `studentName` and/or `guardianId`.
 2. If multiple matches, narrow with `centerId` and guardian linkage.
 3. Use enrollments and status fields for support reasoning.
+
+### Other entity lookup flow
+
+1. If the request is about appointments, session types, instructors, resources, settings, or app modules, use `mathnasium_get_entity`.
+2. First obtain the exact `companyId` or `locationId` using `mathnasium_find_center` if needed.
+3. Call `mathnasium_get_entity` with the explicit `entityType` and required scope ID.
+4. If the support request only has a vague name and no center/company context, ask for the missing scope before calling the tool.
+5. Do not use `mathnasium_get_entity` for guardian/student/center search.
 
 ### Log lookup flow
 
