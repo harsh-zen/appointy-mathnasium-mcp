@@ -26,7 +26,7 @@ Use this skill when a support workflow needs:
 - appointments, services/session types, instructors/employees, resources, settings, or app-module lookup
 - mapping ticket text to valid Appointy entities
 - production GCP log retrieval for Radius/Appointy sync investigation
-- custom production log search by exact queryId, path, error text, or internal code-log phrase
+- custom production log search by exact queryId, path, error text, or exact log text supplied in the request
 
 ## Tool contracts
 
@@ -127,12 +127,12 @@ Examples:
 
 Purpose:
 - Search Mathnasium production GKE logs using custom filters without writing raw Cloud Logging syntax.
-- Use this for all log investigations, including Radius wrapper sync logs, GraphQL/queryId logs, Admin request logs, and exact internal code-log phrases.
+- Use this for all log investigations, including Radius wrapper sync logs, GraphQL/queryId logs, Admin request logs, and exact log/error text supplied in the request.
 
 Use when:
 - The support request mentions a frontend/backend GraphQL `queryId`.
 - You need Admin request logs for a path or status code.
-- Ohara/code context reveals an exact internal log phrase.
+- The request provides an exact log phrase, error text, endpoint fragment, or payload clue.
 - You need to search a specific error text, endpoint name, entity ID, or mixed set of terms.
 
 Source presets:
@@ -142,7 +142,7 @@ Source presets:
 - `radius_wrappers`: filters toward wrapper `Successful`/`Failed` logs.
 
 Inputs:
-- `textTerms`: exact text snippets or internal log phrases.
+- `textTerms`: exact text snippets, error messages, or payload clues.
 - `identifiers`: emails, Appointy IDs, Radius IDs, custom IDs, names, etc.
 - `messages`: exact `jsonPayload.message` values such as `Finished request` or `Error while processing request`.
 - `queryIds`: GraphQL operation/query IDs such as `CompanyAppointmentReportQuery`.
@@ -155,7 +155,7 @@ Examples:
 - Radius wrapper sync trace: `source="radius_wrappers"`, `identifiers=["guardian@email.com"]`, `endpointNames=["customer-account"]`, include timeframe.
 - GraphQL query trace: `source="graphql"`, `queryIds=["AppointmentQuery"]`, include timeframe.
 - Admin path trace: `source="admin_requests"`, `paths=["/graphql"]`, `statusCodes=["403"]`, include timeframe.
-- Internal code log: `source="all"`, `textTerms=["Total number of rows"]`, add identifiers/timeframe.
+- Exact text search: `source="all"`, `textTerms=["Total number of rows"]`, add identifiers/timeframe.
 
 Investigation tip:
 - If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
@@ -193,7 +193,7 @@ If no center/location hint is present:
 1. Extract identifiers and timeframe from the Slack/ticket request.
 2. Resolve extra IDs with center/guardian/student tools if useful.
 3. For Radius wrapper sync failures, call `mathnasium_search_custom_logs` with `source="radius_wrappers"`.
-4. For GraphQL/queryId/path/internal-log investigations, call `mathnasium_search_custom_logs` with the appropriate source preset.
+4. For GraphQL/queryId/path/exact-text investigations, call `mathnasium_search_custom_logs` with the appropriate source preset.
 5. If current-window logs show success but the issue says data was missing, search farther back for earlier failures.
 6. Use the returned logs as evidence for the final support explanation.
 
