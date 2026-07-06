@@ -2200,50 +2200,6 @@ async def _get_graphql_entity_internal(
     }
 
 
-def _build_gcp_logs_filter(
-    *,
-    identifiers: List[str],
-    start_time: Optional[str],
-    end_time: Optional[str],
-    statuses: List[str],
-    endpoint_names: List[str],
-    severity_min: str,
-) -> Tuple[str, str, str]:
-    now = datetime.now(timezone.utc)
-    start_default = datetime.fromtimestamp(now.timestamp() - (GCP_LOG_DEFAULT_LOOKBACK_HOURS * 3600), tz=timezone.utc)
-    start = _normalize_log_timestamp(start_time, default=start_default)
-    end = _normalize_log_timestamp(end_time, default=now)
-
-    filter_parts = [
-        'resource.type="k8s_container"',
-        f'resource.labels.project_id="{_gcp_filter_string(GCP_PROJECT_ID)}"',
-        f'resource.labels.location="{_gcp_filter_string(GCP_LOG_LOCATION)}"',
-        f'resource.labels.cluster_name="{_gcp_filter_string(GCP_CLUSTER_NAME)}"',
-        f'resource.labels.namespace_name="{_gcp_filter_string(GCP_NAMESPACE)}"',
-        f'labels."k8s-pod/app"="{_gcp_filter_string(GCP_POD_APP_LABEL)}"',
-        f"severity>={_gcp_filter_string(severity_min or 'DEFAULT')}",
-        f'timestamp>="{start}"',
-        f'timestamp<="{end}"',
-    ]
-
-    status_values = [value for value in [_normalize_space(_to_text(s)) for s in statuses] if value]
-    if status_values:
-        status_filter = " OR ".join([f'jsonPayload.message="{_gcp_filter_string(status)}"' for status in status_values])
-        filter_parts.append(f"({status_filter})")
-
-    identifier_values = [value for value in [_normalize_space(_to_text(i)) for i in identifiers] if value]
-    if identifier_values:
-        identifier_filter = " OR ".join([f'"{_gcp_filter_string(identifier)}"' for identifier in identifier_values])
-        filter_parts.append(f"({identifier_filter})")
-
-    endpoint_values = [value for value in [_normalize_space(_to_text(e)) for e in endpoint_names] if value]
-    if endpoint_values:
-        endpoint_filter = " OR ".join([f'"{_gcp_filter_string(endpoint)}"' for endpoint in endpoint_values])
-        filter_parts.append(f"({endpoint_filter})")
-
-    return "\n".join(filter_parts), start, end
-
-
 def _or_text_filter(values: List[str]) -> str:
     cleaned = [value for value in [_normalize_space(_to_text(v)) for v in values] if value]
     if not cleaned:
@@ -2317,13 +2273,7 @@ def _build_custom_logs_filter(
 
     term_values = [
         value
-        for value in [
-            *text_terms,
-            *identifiers,
-            *paths,
-            *endpoint_names,
-            *query_ids,
-        ]
+        for value in [*text_terms, *identifiers]
         if _normalize_space(_to_text(value))
     ]
     if term_values:
@@ -2333,7 +2283,15 @@ def _build_custom_logs_filter(
         else:
             filter_parts.append(f"({_or_text_filter(term_values)})")
 
-    return "\n".join(filter_parts), start, end, term_values
+    path_values = [value for value in paths if _normalize_space(_to_text(value))]
+    if path_values:
+        filter_parts.append(f"({_or_text_filter(path_values)})")
+
+    endpoint_values = [value for value in endpoint_names if _normalize_space(_to_text(value))]
+    if endpoint_values:
+        filter_parts.append(f"({_or_text_filter(endpoint_values)})")
+
+    return "\n".join(filter_parts), start, end, [*term_values, *path_values, *endpoint_values, *query_ids]
 
 
 def _extract_payload_field(payload: Any, *names: str) -> str:
@@ -2394,59 +2352,6 @@ def _entry_to_dict(entry: Any, *, identifiers: List[str], include_payload: bool)
         "resourceLabels": dict(resource_labels) if isinstance(resource_labels, dict) else {},
         "labels": dict(labels) if isinstance(labels, dict) else {},
         "payload": _compact_payload(payload, include_payload=include_payload),
-    }
-
-
-async def _search_gcp_logs_internal(
-    *,
-    identifiers: List[str],
-    start_time: Optional[str],
-    end_time: Optional[str],
-    statuses: List[str],
-    endpoint_names: List[str],
-    severity_min: str,
-    limit: int,
-    include_payload: bool,
-) -> Dict[str, Any]:
-    identifier_values = [value for value in [_normalize_space(_to_text(i)) for i in identifiers] if value]
-    if not identifier_values:
-        return {
-            "status": "failed",
-            "error": "At least one identifier is required.",
-            "matches": [],
-        }
-
-    limit = max(1, min(limit, GCP_LOG_MAX_LIMIT))
-    query, resolved_start, resolved_end = _build_gcp_logs_filter(
-        identifiers=identifier_values,
-        start_time=start_time,
-        end_time=end_time,
-        statuses=statuses or ["Successful", "Failed"],
-        endpoint_names=endpoint_names or [],
-        severity_min=severity_min or "DEFAULT",
-    )
-    entries = await gcp_logging.list_entries(filter_=query, limit=limit)
-    matches = [_entry_to_dict(entry, identifiers=identifier_values, include_payload=include_payload) for entry in entries]
-    successful = sum(1 for row in matches if _to_text(row.get("message")).lower() == "successful")
-    failed = sum(1 for row in matches if _to_text(row.get("message")).lower() == "failed")
-    timestamps = [row.get("timestamp") for row in matches if row.get("timestamp")]
-    return {
-        "status": "success",
-        "queryUsed": query,
-        "timeRange": {
-            "startTime": resolved_start,
-            "endTime": resolved_end,
-        },
-        "matches": matches,
-        "summary": {
-            "total": len(matches),
-            "successful": successful,
-            "failed": failed,
-            "earliest": min(timestamps) if timestamps else "",
-            "latest": max(timestamps) if timestamps else "",
-            "limit": limit,
-        },
-        "warnings": [],
     }
 
 
@@ -2664,47 +2569,6 @@ async def mathnasium_get_entity(
         return {"status": "failed", "error": str(exc), "details": exc.payload}
     except Exception as exc:
         return {"status": "failed", "error": f"Unexpected error in entity lookup: {exc}"}
-
-
-@mcp.tool()
-async def mathnasium_search_gcp_logs(
-    identifiers: List[str],
-    startTime: Optional[str] = None,
-    endTime: Optional[str] = None,
-    statuses: Optional[List[str]] = None,
-    endpointNames: Optional[List[str]] = None,
-    severityMin: str = "DEFAULT",
-    limit: int = 100,
-    includePayload: bool = True,
-) -> Dict[str, Any]:
-    """Search Appointy M production GKE Cloud Logging entries by identifiers/timeframe for Mathnasium Radius wrapper activity."""
-    config_error = _require_gcp_logging_config()
-    if config_error:
-        return config_error
-    try:
-        return await _search_gcp_logs_internal(
-            identifiers=identifiers or [],
-            start_time=startTime,
-            end_time=endTime,
-            statuses=statuses or ["Successful", "Failed"],
-            endpoint_names=endpointNames or [],
-            severity_min=severityMin,
-            limit=limit,
-            include_payload=includePayload,
-        )
-    except GcpLoggingError as exc:
-        return {
-            "status": "failed",
-            "error": str(exc),
-            "details": exc.payload,
-            "matches": [],
-        }
-    except Exception as exc:
-        return {
-            "status": "failed",
-            "error": f"Unexpected error in GCP log search: {exc}",
-            "matches": [],
-        }
 
 
 @mcp.tool()

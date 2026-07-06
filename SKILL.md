@@ -14,7 +14,6 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
-- `mathnasium_search_gcp_logs`
 - `mathnasium_search_custom_logs`
 
 ## When to use
@@ -124,37 +123,11 @@ Examples:
 - To inspect instructors for a center owner: use `entityType="employees"` and `parentId=<companyId>`.
 - To inspect center settings: use `entityType="location_settings"`, `companyId=<companyId>`, and `locationId=<locationId>`.
 
-### `mathnasium_search_gcp_logs`
-
-Purpose:
-- Retrieve Appointy M production GKE logs for Mathnasium Radius wrapper endpoint activity.
-- This tool searches logs only; the agent must interpret the results.
-
-Use when:
-- The support request asks to check logs or sync failures.
-- Appointy lookup cannot explain whether Radius data reached Appointy.
-- You have identifiers such as email, Radius ID, custom ID, Appointy guardian/student/company/location ID, or endpoint text.
-
-Input:
-- `identifiers` is required and should include every known email/id/name fragment relevant to the sync issue.
-- `startTime` and `endTime` should be ISO timestamps when the ticket gives an approximate timeframe.
-- `statuses` defaults to `Successful` and `Failed`.
-- `endpointNames` can narrow to wrapper names such as `customer-account`, `student`, or `appointment`.
-- `limit` should stay small first, then increase only if needed.
-
-Output:
-- `matches` contains normalized log entries.
-- `summary.successful` and `summary.failed` count wrapper success/failure messages.
-- `queryUsed` shows the exact Cloud Logging filter for audit/debugging.
-
-Investigation tip:
-- If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
-
 ### `mathnasium_search_custom_logs`
 
 Purpose:
 - Search Mathnasium production GKE logs using custom filters without writing raw Cloud Logging syntax.
-- Use when the standard Radius wrapper log search is too narrow.
+- Use this for all log investigations, including Radius wrapper sync logs, GraphQL/queryId logs, Admin request logs, and exact internal code-log phrases.
 
 Use when:
 - The support request mentions a frontend/backend GraphQL `queryId`.
@@ -179,9 +152,13 @@ Inputs:
 - `matchAllTerms`: set true when every provided text/path/id/query term must be present.
 
 Examples:
+- Radius wrapper sync trace: `source="radius_wrappers"`, `identifiers=["guardian@email.com"]`, `endpointNames=["customer-account"]`, include timeframe.
 - GraphQL query trace: `source="graphql"`, `queryIds=["AppointmentQuery"]`, include timeframe.
 - Admin path trace: `source="admin_requests"`, `paths=["/graphql"]`, `statusCodes=["403"]`, include timeframe.
 - Internal code log: `source="all"`, `textTerms=["Total number of rows"]`, add identifiers/timeframe.
+
+Investigation tip:
+- If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
 
 ## Required support flow
 
@@ -215,8 +192,8 @@ If no center/location hint is present:
 
 1. Extract identifiers and timeframe from the Slack/ticket request.
 2. Resolve extra IDs with center/guardian/student tools if useful.
-3. For Radius wrapper sync failures, call `mathnasium_search_gcp_logs`.
-4. For GraphQL/queryId/path/internal-log investigations, call `mathnasium_search_custom_logs`.
+3. For Radius wrapper sync failures, call `mathnasium_search_custom_logs` with `source="radius_wrappers"`.
+4. For GraphQL/queryId/path/internal-log investigations, call `mathnasium_search_custom_logs` with the appropriate source preset.
 5. If current-window logs show success but the issue says data was missing, search farther back for earlier failures.
 6. Use the returned logs as evidence for the final support explanation.
 
@@ -239,7 +216,7 @@ For log lookup, return:
 
 - identifiers searched
 - timeframe searched
-- count of successful and failed log entries
+- count of matching log entries and message/severity summary
 - relevant errors or dropped payload clues
 - whether a broader/earlier search is needed
 

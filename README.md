@@ -15,7 +15,6 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
-- `mathnasium_search_gcp_logs`
 - `mathnasium_search_custom_logs`
 
 ## Data Source Notes:
@@ -26,7 +25,6 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
 - `mathnasium_get_entity` is a common read-only entity lookup for objects not covered by the first-class center/guardian/student tools.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
-- `mathnasium_search_gcp_logs` uses Google Cloud Logging to search Appointy M production GKE logs for Mathnasium Radius wrapper activity.
 - `mathnasium_search_custom_logs` searches the same production GKE logs using custom text, queryId, path, message, and endpoint filters without exposing raw Cloud Logging syntax.
 
 ## Environment Variables
@@ -75,15 +73,11 @@ Optional:
   - For `location_settings`, pass both `companyId` and `locationId`.
   - Optional `entityId` filters exact IDs from returned list results; no fuzzy name matching is performed.
   - This intentionally does not replace `mathnasium_find_center`, `mathnasium_find_guardian`, or `mathnasium_find_student`.
-- `mathnasium_search_gcp_logs`
-  - Requires `identifiers` such as guardian/student email, Radius ID, custom ID, Appointy ID, company/location ID, or endpoint text.
-  - Accepts optional `startTime` and `endTime` as ISO timestamps; defaults to the last configured lookback window.
-  - Defaults to `Successful` and `Failed` wrapper log messages.
-  - Returns matching raw/structured log entries and summary counts; the agent performs diagnosis using the logs.
 - `mathnasium_search_custom_logs`
   - Use for non-standard log investigations where the agent already has exact terms, query IDs, request paths, endpoint names, or error/message text.
   - `source` can be `all`, `admin_requests`, `graphql`, or `radius_wrappers`.
   - Accepts `textTerms`, `identifiers`, `messages`, `queryIds`, `paths`, `endpointNames`, `statusCodes`, ISO `startTime`/`endTime`, and `matchAllTerms`.
+  - For Radius wrapper sync logs, use `source="radius_wrappers"` with identifiers and optional `endpointNames` such as `customer-account`, `student`, or `appointment`.
   - Requires at least one meaningful filter; it will not run a broad unfiltered production log scan.
 
 Transport/runtime (optional):
