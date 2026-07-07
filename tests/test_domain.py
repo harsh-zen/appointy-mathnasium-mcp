@@ -1,0 +1,134 @@
+import unittest
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+from appointy_mathnasium_mcp import domain
+
+
+class DomainLogicTests(unittest.TestCase):
+    def test_enrolment_booking_status_matches_frontend_style_logic(self):
+        now = datetime(2026, 7, 7, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            domain._enrolment_booking_status(
+                {
+                    "startDate": (now + timedelta(days=5)).isoformat(),
+                    "terminationDate": (now + timedelta(days=40)).isoformat(),
+                },
+                now,
+            ),
+            "active",
+        )
+        self.assertEqual(
+            domain._enrolment_booking_status(
+                {
+                    "startDate": (now - timedelta(days=40)).isoformat(),
+                    "terminationDate": "0001-01-01T00:00:00Z",
+                },
+                now,
+            ),
+            "active",
+        )
+        self.assertEqual(
+            domain._enrolment_booking_status(
+                {
+                    "startDate": (now - timedelta(days=40)).isoformat(),
+                    "terminationDate": (now - timedelta(days=1)).isoformat(),
+                },
+                now,
+            ),
+            "inactive",
+        )
+
+    def test_resolve_guardian_parent_scope_accepts_short_location_id(self):
+        context = {
+            "centerIndex": [
+                {
+                    "companyId": "grp_1/com_1",
+                    "locationId": "grp_1/com_1/loc_1",
+                }
+            ]
+        }
+
+        parent, company = domain._resolve_guardian_parent_scope("loc_1", context)
+
+        self.assertEqual(parent, "grp_1/com_1/loc_1")
+        self.assertEqual(company, "grp_1/com_1")
+
+
+class GuardianLookupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_find_guardian_supports_explicit_first_and_last_name(self):
+        calls = {}
+        context = {
+            "centerIndex": [
+                {
+                    "companyId": "grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1",
+                    "locationId": "grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1/loc_1",
+                    "name": "Mathnasium Test",
+                    "active": True,
+                }
+            ],
+            "companies": [
+                {
+                    "companyId": "grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1",
+                    "locations": [],
+                }
+            ],
+        }
+
+        class FakeAppointy:
+            async def find_guardians_graphql(self, **kwargs):
+                calls["find"] = kwargs
+                return {
+                    "data": {
+                        "customers": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1/cust_1",
+                                        "firstName": "Jason",
+                                        "lastName": "Mallet",
+                                        "email": "jason@example.com",
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+
+            async def get_guardian_students_detail_graphql(self, **kwargs):
+                calls["detail"] = kwargs
+                return {
+                    "data": {
+                        "customerLocationLinks": {"locationIds": []},
+                        "students": {"edges": []},
+                    }
+                }
+
+        async def fake_context(refresh=False):
+            return context
+
+        with (
+            patch.object(domain, "appointy", FakeAppointy()),
+            patch.object(domain, "_get_group_context_cached", fake_context),
+            patch.object(domain, "MATHNASIUM_GROUP_ID", "grp_01HA9WW1JPRN80YE0DS6ZJJN88"),
+        ):
+            result = await domain._find_guardians_internal(
+                parent_id="grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1",
+                email=None,
+                name=None,
+                first_name="Jason",
+                last_name="Mallet",
+                phone=None,
+                center_id=None,
+                limit=10,
+            )
+
+        self.assertEqual(calls["find"]["first_name"], "Jason")
+        self.assertEqual(len(result["matches"]), 1)
+        self.assertEqual(result["matches"][0]["name"], "Jason Mallet")
+        self.assertEqual(result["matches"][0]["matchReason"], "exact_name")
+
+
+if __name__ == "__main__":
+    unittest.main()
