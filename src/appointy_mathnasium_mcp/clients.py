@@ -105,7 +105,7 @@ class AppointyClient:
         params: Optional[Dict[str, Any]] = None,
         json_body: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        error = _require_config()
+        error = require_config()
         if error:
             raise AppointyApiError(error["error"], payload=error)
 
@@ -304,7 +304,7 @@ class GcpLoggingClient:
 
     def _list_entries_sync(self, *, filter_: str, limit: int) -> List[Any]:
         _ensure_google_credentials_file()
-        error = _require_gcp_logging_config()
+        error = require_gcp_logging_config()
         if error:
             raise GcpLoggingError(error["error"], payload=error)
         client = logging_v2.Client(project=self.project_id)  # type: ignore[union-attr]
