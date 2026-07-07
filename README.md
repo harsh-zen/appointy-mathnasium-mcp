@@ -37,7 +37,6 @@ Required:
 
 Optional:
 
-- `MATHNASIUM_COMPANY_ID_OPTIONAL`
 - `DEFAULT_SUPPORT_USER_ID`
 - `DEFAULT_FIRST` (default `25`)
 - `GROUP_CONTEXT_CACHE_TTL_SECONDS` (default `900`)
@@ -59,7 +58,8 @@ Optional:
 - `mathnasium_find_guardian`
   - Requires `parentId` (`companyId` or `locationId`).
   - Searches only inside that scope (no cross-company scan).
-  - Accepts at least one of: `email`, `name`, `phone`.
+  - Accepts at least one of: `email`, `name`, `firstName`, `lastName`, `phone`.
+  - `name` can be a full/partial name; `firstName` and `lastName` are available when the agent has separated name parts.
 - `mathnasium_find_student`
   - Uses group-level student search (`MATHNASIUM_GROUP_ID`) directly.
   - `guardianId` is supported as a direct filter.
@@ -124,7 +124,6 @@ docker run --rm -p 8080:8080 \
   -e APPOINTY_API_BASE_URL \
   -e APPOINTY_API_KEY \
   -e MATHNASIUM_GROUP_ID \
-  -e MATHNASIUM_COMPANY_ID_OPTIONAL \
   -e GOOGLE_APPLICATION_CREDENTIALS_JSON \
   -e GOOGLE_APPLICATION_CREDENTIALS \
   -e GCP_PROJECT_ID \

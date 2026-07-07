@@ -70,8 +70,9 @@ Hard requirement:
 
 Input:
 - `parentId` (required)
-- plus at least one of `email`, `name`, `phone`
+- plus at least one of `email`, `name`, `firstName`, `lastName`, `phone`
 - optional `centerId` for extra narrowing
+- use `firstName` and `lastName` when the requester provides separated name parts; use `name` for a full/partial name string
 
 ### `mathnasium_find_student`
 
