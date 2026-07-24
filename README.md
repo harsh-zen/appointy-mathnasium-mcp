@@ -42,7 +42,7 @@ Optional:
 - `GROUP_CONTEXT_CACHE_TTL_SECONDS` (default `900`)
 - `APPOINTY_TIMEOUT_SECONDS` (default `20`)
 - `ENABLE_PII_MASKING` (default `false`)
-- `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://www.appointy.com/{locationSlug}`)
+- `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://mathnasium-booking.appointy.com/{locationSlug}`)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (preferred deployed secret containing the service account JSON)
 - `GOOGLE_APPLICATION_CREDENTIALS` (local path to service account key, or use ADC/workload identity)
 - `GCP_PROJECT_ID` (default `waqt-prod`)

@@ -38,7 +38,7 @@ Purpose:
 Use when:
 - starting a new investigation
 - you need canonical center/company IDs
-- you need booking URL or slug context
+- you need company-level booking URL or slug context
 
 ### `mathnasium_find_center`
 
@@ -55,7 +55,10 @@ Output to capture for next steps:
 - `companyId`
 - `locationId`
 - `centerName`
-- `bookingUrl`
+- `bookingUrl` (primary support URL; company-level when available)
+- `companyBookingUrl`
+- `locationBookingUrl`
+- `bookingUrlLevel`
 - `active`
 
 ### `mathnasium_find_guardian`

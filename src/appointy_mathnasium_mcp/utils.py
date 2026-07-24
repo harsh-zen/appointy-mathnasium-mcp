@@ -185,26 +185,44 @@ def _decode_base64_json(value: Optional[str]) -> Dict[str, Any]:
     return {}
 
 
-def _build_booking_urls(location_slug: str, company_slug: str = "") -> List[str]:
-    urls: List[str] = []
+def _build_booking_url_for_slug(slug: str, *, location_slug: str = "", company_slug: str = "") -> str:
+    target_slug = _normalize_text(slug)
+    if not target_slug:
+        return ""
+
     template = APPOINTY_BOOKING_URL_TEMPLATE.strip()
-    if template and "{locationSlug}" in template:
+    if template:
         try:
             built = template.format(
-                locationSlug=location_slug,
-                companySlug=company_slug,
-                slug=location_slug,
+                locationSlug=target_slug,
+                companySlug=company_slug or target_slug,
+                slug=target_slug,
             )
             if built:
-                urls.append(built)
+                return built
         except Exception:
             pass
 
-    # Safe fallback candidates when template is not supplied or mismatched.
-    if location_slug:
-        urls.append(f"https://www.appointy.com/{location_slug}")
+    return f"https://mathnasium-booking.appointy.com/{target_slug}"
+
+
+def _build_booking_url_info(location_slug: str, company_slug: str = "") -> Dict[str, Any]:
+    location_slug = _normalize_text(location_slug)
+    company_slug = _normalize_text(company_slug)
+    company_url = _build_booking_url_for_slug(company_slug, location_slug=location_slug, company_slug=company_slug)
+    location_url = _build_booking_url_for_slug(location_slug, location_slug=location_slug, company_slug=company_slug)
+
+    urls: List[str] = []
+    # Mathnasium support normally shares the company-level booking page. The
+    # location-level URL remains useful evidence, but should not be primary.
+    for url in [company_url, location_url]:
+        if url:
+            urls.append(url)
+
     if company_slug:
         urls.append(f"https://www.appointy.com/{company_slug}")
+    if location_slug:
+        urls.append(f"https://www.appointy.com/{location_slug}")
 
     deduped = []
     seen = set()
@@ -214,7 +232,19 @@ def _build_booking_urls(location_slug: str, company_slug: str = "") -> List[str]
             continue
         seen.add(cleaned)
         deduped.append(cleaned)
-    return deduped
+
+    primary = company_url or location_url
+    return {
+        "bookingUrl": primary,
+        "bookingUrls": deduped,
+        "bookingUrlLevel": "company" if company_url else ("location" if location_url else "none"),
+        "companyBookingUrl": company_url,
+        "locationBookingUrl": location_url,
+    }
+
+
+def _build_booking_urls(location_slug: str, company_slug: str = "") -> List[str]:
+    return _build_booking_url_info(location_slug, company_slug).get("bookingUrls", [])
 
 
 def _unique_by_key(rows: List[Dict[str, Any]], key_fields: List[str]) -> List[Dict[str, Any]]:

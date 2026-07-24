@@ -40,6 +40,30 @@ class DomainLogicTests(unittest.TestCase):
             "inactive",
         )
 
+
+    def test_center_booking_url_prefers_company_slug_for_support(self):
+        company = {
+            "id": "grp_1/com_gurmeet",
+            "displayName": "Gurmeet C",
+            "slugObject": {"slugValue": "gurmeetc"},
+        }
+        location = {
+            "id": "grp_1/com_gurmeet/loc_teddington",
+            "name": "Teddington UK",
+            "customLocationId": "3706",
+            "active": True,
+            "slugObject": {"slugValue": "mathnasium1947l"},
+            "preference": {"timezone": "Europe/London"},
+        }
+
+        parsed = domain._parse_location_node(location, company)
+
+        self.assertEqual(parsed["bookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(parsed["bookingUrlLevel"], "company")
+        self.assertEqual(parsed["companyBookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(parsed["locationBookingUrl"], "https://mathnasium-booking.appointy.com/mathnasium1947l")
+        self.assertEqual(parsed["bookingUrls"][0], "https://mathnasium-booking.appointy.com/gurmeetc")
+
     def test_resolve_guardian_parent_scope_accepts_short_location_id(self):
         context = {
             "centerIndex": [

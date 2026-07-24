@@ -7,7 +7,7 @@ from .config import DEFAULT_FIRST, GROUP_CONTEXT_CACHE_TTL_SECONDS, MATHNASIUM_G
 from .errors import AppointyApiError
 from .queries import GRAPHQL_OTHER_ENTITY_QUERIES
 from .utils import (
-    _build_booking_urls,
+    _build_booking_url_info,
     _coalesce,
     _decode_base64_json,
     _email_variants,
@@ -36,6 +36,7 @@ def _parse_location_node(location: Dict[str, Any], company: Dict[str, Any]) -> D
     preference = location.get("preference") if isinstance(location.get("preference"), dict) else {}
     location_slug = _to_text(_coalesce(slug_object.get("slugValue"), location.get("slug"), location.get("slugValue")))
     company_slug = _to_text(_coalesce(company_slug_object.get("slugValue"), company.get("slug"), company.get("slugValue")))
+    booking_info = _build_booking_url_info(location_slug, company_slug)
     return {
         "locationId": _to_text(location_id),
         "companyId": _to_text(_coalesce(company.get("id"), company.get("companyId"), company.get("company_id"))),
@@ -46,7 +47,7 @@ def _parse_location_node(location: Dict[str, Any], company: Dict[str, Any]) -> D
         "companySlug": company_slug,
         "timezone": _to_text(_coalesce(preference.get("timezone"), location.get("timezone"))),
         "active": bool(_coalesce(location.get("active"), True)),
-        "bookingUrls": _build_booking_urls(location_slug, company_slug),
+        **booking_info,
     }
 
 
@@ -100,7 +101,11 @@ def _normalize_group_context_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "slug": location["slug"],
                     "timezone": location["timezone"],
                     "active": location["active"],
+                    "bookingUrl": location["bookingUrl"],
                     "bookingUrls": location["bookingUrls"],
+                    "bookingUrlLevel": location["bookingUrlLevel"],
+                    "companyBookingUrl": location["companyBookingUrl"],
+                    "locationBookingUrl": location["locationBookingUrl"],
                 }
             )
 
@@ -692,7 +697,10 @@ def _build_center_details_from_ids(center_ids: List[str], context: Dict[str, Any
                 "timezone": _to_text(match.get("timezone")),
                 "active": bool(match.get("active", True)),
                 "bookingUrls": booking_urls,
-                "bookingUrl": booking_urls[0] if booking_urls else "",
+                "bookingUrl": _to_text(match.get("bookingUrl")) or (booking_urls[0] if booking_urls else ""),
+                "bookingUrlLevel": _to_text(match.get("bookingUrlLevel")),
+                "companyBookingUrl": _to_text(match.get("companyBookingUrl")),
+                "locationBookingUrl": _to_text(match.get("locationBookingUrl")),
             }
         )
     return hydrated
@@ -979,7 +987,10 @@ async def _find_centers_internal(*, query: Optional[str], include_inactive: bool
                 "active": bool(row.get("active", True)),
                 "centerType": center_type,
                 "bookingUrls": _listify(row.get("bookingUrls")),
-                "bookingUrl": (_listify(row.get("bookingUrls"))[0] if _listify(row.get("bookingUrls")) else ""),
+                "bookingUrl": _to_text(row.get("bookingUrl")) or (_listify(row.get("bookingUrls"))[0] if _listify(row.get("bookingUrls")) else ""),
+                "bookingUrlLevel": _to_text(row.get("bookingUrlLevel")),
+                "companyBookingUrl": _to_text(row.get("companyBookingUrl")),
+                "locationBookingUrl": _to_text(row.get("locationBookingUrl")),
                 "confidence": round(score, 3),
             }
         )
