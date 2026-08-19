@@ -395,6 +395,32 @@ query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
         title
         description
         active
+        status
+        serviceType
+        capacity
+        durations
+        mathnasiumServiceLinks {
+          id
+          locationId
+          serviceId
+          memberships {
+            id
+            name
+          }
+          grades {
+            id
+            name
+          }
+        }
+        settings {
+          id
+          bookingRules {
+            availabilityType
+            detectCustomerTimezone
+            fixedInterval
+            precisionPattern
+          }
+        }
       }
     }
   }

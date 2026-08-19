@@ -68,6 +68,7 @@ Optional:
   - Use for exact scoped reads of entities not covered by center/guardian/student tools.
   - Supported `entityType` values: `appointments`, `services`, `employees`, `resources`, `group_settings`, `company_settings`, `location_settings`, `apps`.
   - For `appointments`, `services`, and `resources`, pass a location-level `parentId`.
+  - `services` returns session-type linkage data: `membershipTypeIds`, `gradeRangeIds`, linked names, durations in seconds/minutes, active status, and booking-rule metadata. This lets support compare a student's enrollment IDs with the session types configured at that center.
   - For `employees`, pass a company-level `parentId`.
   - For `company_settings` and `apps`, pass `companyId`.
   - For `location_settings`, pass both `companyId` and `locationId`.

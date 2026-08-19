@@ -154,5 +154,57 @@ class GuardianLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["matches"][0]["matchReason"], "exact_name")
 
 
+class EntityLookupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_services_include_mathnasium_enrolment_linkage(self):
+        class FakeAppointy:
+            async def _graphql(self, **kwargs):
+                return {
+                    "data": {
+                        "services": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "grp_1/com_1/loc_1/srv_1",
+                                        "title": "In Center",
+                                        "active": True,
+                                        "durations": [1800, 3600],
+                                        "mathnasiumServiceLinks": {
+                                            "id": "math_1",
+                                            "memberships": [{"id": "mem_33986", "name": "Monthly"}],
+                                            "grades": [{"id": "grd_14594", "name": "Grade 6"}],
+                                        },
+                                        "settings": {
+                                            "bookingRules": {
+                                                "availabilityType": "AUTOMATIC",
+                                                "fixedInterval": 1800,
+                                            }
+                                        },
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "errors": None,
+                }
+
+        with patch.object(domain, "appointy", FakeAppointy()):
+            result = await domain._get_graphql_entity_internal(
+                entity_type="services",
+                parent_id="grp_1/com_1/loc_1",
+                company_id="grp_1/com_1",
+                location_id="grp_1/com_1/loc_1",
+                entity_id=None,
+                limit=25,
+            )
+
+        service = result["items"][0]
+        self.assertEqual(service["membershipTypeIds"], ["mem_33986"])
+        self.assertEqual(service["gradeRangeIds"], ["grd_14594"])
+        self.assertEqual(service["durationsMinutes"], [30.0, 60.0])
+        self.assertTrue(service["hasMembershipLinks"])
+        self.assertTrue(service["hasGradeRangeLinks"])
+        self.assertEqual(service["settings"]["bookingRules"]["availabilityType"], "AUTOMATIC")
+
+
 if __name__ == "__main__":
     unittest.main()

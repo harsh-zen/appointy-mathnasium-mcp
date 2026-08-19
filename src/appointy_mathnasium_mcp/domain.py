@@ -1124,7 +1124,7 @@ async def _get_graphql_entity_internal(
             continue
         if entity_id and _to_text(node.get("id")) != _to_text(entity_id):
             continue
-        items.append(node)
+        items.append(_normalize_service_entity(node) if entity_type == "services" else node)
 
     return {
         "status": "success" if not errors else "partial",
@@ -1137,4 +1137,27 @@ async def _get_graphql_entity_internal(
         "warnings": [
             "This common lookup does exact entity-type/parent/id based reads only; it does not fuzzy-search names or infer missing scope."
         ],
+    }
+
+
+def _normalize_service_entity(node: Dict[str, Any]) -> Dict[str, Any]:
+    service_link = node.get("mathnasiumServiceLinks")
+    if not isinstance(service_link, dict):
+        service_link = {}
+
+    memberships = [item for item in _listify(service_link.get("memberships")) if isinstance(item, dict)]
+    grade_ranges = [item for item in _listify(service_link.get("grades")) if isinstance(item, dict)]
+    durations = [value for value in _listify(node.get("durations")) if isinstance(value, (int, float))]
+
+    return {
+        **node,
+        "mathnasiumServiceLinkId": _to_text(service_link.get("id")),
+        "membershipTypes": memberships,
+        "membershipTypeIds": [_to_text(item.get("id")) for item in memberships if _to_text(item.get("id"))],
+        "gradeRanges": grade_ranges,
+        "gradeRangeIds": [_to_text(item.get("id")) for item in grade_ranges if _to_text(item.get("id"))],
+        "durationsSeconds": durations,
+        "durationsMinutes": [value / 60 for value in durations],
+        "hasMembershipLinks": bool(memberships),
+        "hasGradeRangeLinks": bool(grade_ranges),
     }

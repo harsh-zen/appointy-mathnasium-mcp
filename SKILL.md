@@ -124,6 +124,8 @@ Returns:
 Examples:
 - To inspect appointments at a center: use `entityType="appointments"` and `parentId=<locationId>`.
 - To inspect session types at a center: use `entityType="services"` and `parentId=<locationId>`.
+- For a booking/session-type eligibility issue, compare each student's enrollment `membershipTypeId`, `gradeRangeId`, and `sessionLengths` with each active service's `membershipTypeIds`, `gradeRangeIds`, and `durationsSeconds`.
+- Treat membership or grade linkage as verified only when the exact enrollment ID appears in the service's returned ID array. Empty arrays mean that the session type has no corresponding Mathnasium links configured; do not infer linkage from the service name.
 - To inspect instructors for a center owner: use `entityType="employees"` and `parentId=<companyId>`.
 - To inspect center settings: use `entityType="location_settings"`, `companyId=<companyId>`, and `locationId=<locationId>`.
 
