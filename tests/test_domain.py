@@ -40,6 +40,30 @@ class DomainLogicTests(unittest.TestCase):
             "inactive",
         )
 
+
+    def test_center_booking_url_prefers_company_slug_for_support(self):
+        company = {
+            "id": "grp_1/com_gurmeet",
+            "displayName": "Gurmeet C",
+            "slugObject": {"slugValue": "gurmeetc"},
+        }
+        location = {
+            "id": "grp_1/com_gurmeet/loc_teddington",
+            "name": "Teddington UK",
+            "customLocationId": "3706",
+            "active": True,
+            "slugObject": {"slugValue": "mathnasium1947l"},
+            "preference": {"timezone": "Europe/London"},
+        }
+
+        parsed = domain._parse_location_node(location, company)
+
+        self.assertEqual(parsed["bookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(parsed["bookingUrlLevel"], "company")
+        self.assertEqual(parsed["companyBookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(parsed["locationBookingUrl"], "https://mathnasium-booking.appointy.com/mathnasium1947l")
+        self.assertEqual(parsed["bookingUrls"][0], "https://mathnasium-booking.appointy.com/gurmeetc")
+
     def test_resolve_guardian_parent_scope_accepts_short_location_id(self):
         context = {
             "centerIndex": [
@@ -128,6 +152,58 @@ class GuardianLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["matches"]), 1)
         self.assertEqual(result["matches"][0]["name"], "Jason Mallet")
         self.assertEqual(result["matches"][0]["matchReason"], "exact_name")
+
+
+class EntityLookupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_services_include_mathnasium_enrolment_linkage(self):
+        class FakeAppointy:
+            async def _graphql(self, **kwargs):
+                return {
+                    "data": {
+                        "services": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "grp_1/com_1/loc_1/srv_1",
+                                        "title": "In Center",
+                                        "active": True,
+                                        "durations": [1800, 3600],
+                                        "mathnasiumServiceLinks": {
+                                            "id": "math_1",
+                                            "memberships": [{"id": "mem_33986", "name": "Monthly"}],
+                                            "grades": [{"id": "grd_14594", "name": "Grade 6"}],
+                                        },
+                                        "settings": {
+                                            "bookingRules": {
+                                                "availabilityType": "AUTOMATIC",
+                                                "fixedInterval": 1800,
+                                            }
+                                        },
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "errors": None,
+                }
+
+        with patch.object(domain, "appointy", FakeAppointy()):
+            result = await domain._get_graphql_entity_internal(
+                entity_type="services",
+                parent_id="grp_1/com_1/loc_1",
+                company_id="grp_1/com_1",
+                location_id="grp_1/com_1/loc_1",
+                entity_id=None,
+                limit=25,
+            )
+
+        service = result["items"][0]
+        self.assertEqual(service["membershipTypeIds"], ["mem_33986"])
+        self.assertEqual(service["gradeRangeIds"], ["grd_14594"])
+        self.assertEqual(service["durationsMinutes"], [30.0, 60.0])
+        self.assertTrue(service["hasMembershipLinks"])
+        self.assertTrue(service["hasGradeRangeLinks"])
+        self.assertEqual(service["settings"]["bookingRules"]["availabilityType"], "AUTOMATIC")
 
 
 if __name__ == "__main__":

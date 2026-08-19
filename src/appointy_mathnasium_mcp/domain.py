@@ -7,7 +7,7 @@ from .config import DEFAULT_FIRST, GROUP_CONTEXT_CACHE_TTL_SECONDS, MATHNASIUM_G
 from .errors import AppointyApiError
 from .queries import GRAPHQL_OTHER_ENTITY_QUERIES
 from .utils import (
-    _build_booking_urls,
+    _build_booking_url_info,
     _coalesce,
     _decode_base64_json,
     _email_variants,
@@ -36,6 +36,7 @@ def _parse_location_node(location: Dict[str, Any], company: Dict[str, Any]) -> D
     preference = location.get("preference") if isinstance(location.get("preference"), dict) else {}
     location_slug = _to_text(_coalesce(slug_object.get("slugValue"), location.get("slug"), location.get("slugValue")))
     company_slug = _to_text(_coalesce(company_slug_object.get("slugValue"), company.get("slug"), company.get("slugValue")))
+    booking_info = _build_booking_url_info(location_slug, company_slug)
     return {
         "locationId": _to_text(location_id),
         "companyId": _to_text(_coalesce(company.get("id"), company.get("companyId"), company.get("company_id"))),
@@ -46,7 +47,7 @@ def _parse_location_node(location: Dict[str, Any], company: Dict[str, Any]) -> D
         "companySlug": company_slug,
         "timezone": _to_text(_coalesce(preference.get("timezone"), location.get("timezone"))),
         "active": bool(_coalesce(location.get("active"), True)),
-        "bookingUrls": _build_booking_urls(location_slug, company_slug),
+        **booking_info,
     }
 
 
@@ -100,7 +101,11 @@ def _normalize_group_context_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "slug": location["slug"],
                     "timezone": location["timezone"],
                     "active": location["active"],
+                    "bookingUrl": location["bookingUrl"],
                     "bookingUrls": location["bookingUrls"],
+                    "bookingUrlLevel": location["bookingUrlLevel"],
+                    "companyBookingUrl": location["companyBookingUrl"],
+                    "locationBookingUrl": location["locationBookingUrl"],
                 }
             )
 
@@ -692,7 +697,10 @@ def _build_center_details_from_ids(center_ids: List[str], context: Dict[str, Any
                 "timezone": _to_text(match.get("timezone")),
                 "active": bool(match.get("active", True)),
                 "bookingUrls": booking_urls,
-                "bookingUrl": booking_urls[0] if booking_urls else "",
+                "bookingUrl": _to_text(match.get("bookingUrl")) or (booking_urls[0] if booking_urls else ""),
+                "bookingUrlLevel": _to_text(match.get("bookingUrlLevel")),
+                "companyBookingUrl": _to_text(match.get("companyBookingUrl")),
+                "locationBookingUrl": _to_text(match.get("locationBookingUrl")),
             }
         )
     return hydrated
@@ -979,7 +987,10 @@ async def _find_centers_internal(*, query: Optional[str], include_inactive: bool
                 "active": bool(row.get("active", True)),
                 "centerType": center_type,
                 "bookingUrls": _listify(row.get("bookingUrls")),
-                "bookingUrl": (_listify(row.get("bookingUrls"))[0] if _listify(row.get("bookingUrls")) else ""),
+                "bookingUrl": _to_text(row.get("bookingUrl")) or (_listify(row.get("bookingUrls"))[0] if _listify(row.get("bookingUrls")) else ""),
+                "bookingUrlLevel": _to_text(row.get("bookingUrlLevel")),
+                "companyBookingUrl": _to_text(row.get("companyBookingUrl")),
+                "locationBookingUrl": _to_text(row.get("locationBookingUrl")),
                 "confidence": round(score, 3),
             }
         )
@@ -1113,7 +1124,7 @@ async def _get_graphql_entity_internal(
             continue
         if entity_id and _to_text(node.get("id")) != _to_text(entity_id):
             continue
-        items.append(node)
+        items.append(_normalize_service_entity(node) if entity_type == "services" else node)
 
     return {
         "status": "success" if not errors else "partial",
@@ -1126,4 +1137,27 @@ async def _get_graphql_entity_internal(
         "warnings": [
             "This common lookup does exact entity-type/parent/id based reads only; it does not fuzzy-search names or infer missing scope."
         ],
+    }
+
+
+def _normalize_service_entity(node: Dict[str, Any]) -> Dict[str, Any]:
+    service_link = node.get("mathnasiumServiceLinks")
+    if not isinstance(service_link, dict):
+        service_link = {}
+
+    memberships = [item for item in _listify(service_link.get("memberships")) if isinstance(item, dict)]
+    grade_ranges = [item for item in _listify(service_link.get("grades")) if isinstance(item, dict)]
+    durations = [value for value in _listify(node.get("durations")) if isinstance(value, (int, float))]
+
+    return {
+        **node,
+        "mathnasiumServiceLinkId": _to_text(service_link.get("id")),
+        "membershipTypes": memberships,
+        "membershipTypeIds": [_to_text(item.get("id")) for item in memberships if _to_text(item.get("id"))],
+        "gradeRanges": grade_ranges,
+        "gradeRangeIds": [_to_text(item.get("id")) for item in grade_ranges if _to_text(item.get("id"))],
+        "durationsSeconds": durations,
+        "durationsMinutes": [value / 60 for value in durations],
+        "hasMembershipLinks": bool(memberships),
+        "hasGradeRangeLinks": bool(grade_ranges),
     }

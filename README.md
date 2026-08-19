@@ -42,7 +42,7 @@ Optional:
 - `GROUP_CONTEXT_CACHE_TTL_SECONDS` (default `900`)
 - `APPOINTY_TIMEOUT_SECONDS` (default `20`)
 - `ENABLE_PII_MASKING` (default `false`)
-- `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://www.appointy.com/{locationSlug}`)
+- `APPOINTY_BOOKING_URL_TEMPLATE` (default `https://mathnasium-booking.appointy.com/{locationSlug}`)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (preferred deployed secret containing the service account JSON)
 - `GOOGLE_APPLICATION_CREDENTIALS` (local path to service account key, or use ADC/workload identity)
 - `GCP_PROJECT_ID` (default `waqt-prod`)
@@ -68,6 +68,7 @@ Optional:
   - Use for exact scoped reads of entities not covered by center/guardian/student tools.
   - Supported `entityType` values: `appointments`, `services`, `employees`, `resources`, `group_settings`, `company_settings`, `location_settings`, `apps`.
   - For `appointments`, `services`, and `resources`, pass a location-level `parentId`.
+  - `services` returns session-type linkage data: `membershipTypeIds`, `gradeRangeIds`, linked names, durations in seconds/minutes, active status, and booking-rule metadata. This lets support compare a student's enrollment IDs with the session types configured at that center.
   - For `employees`, pass a company-level `parentId`.
   - For `company_settings` and `apps`, pass `companyId`.
   - For `location_settings`, pass both `companyId` and `locationId`.

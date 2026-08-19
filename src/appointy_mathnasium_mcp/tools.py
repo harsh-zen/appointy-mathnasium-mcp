@@ -115,7 +115,7 @@ async def mathnasium_find_center(
 
 @mcp.tool()
 async def mathnasium_get_entity(
-    entityType: Annotated[Literal["appointments", "services", "employees", "resources", "group_settings", "company_settings", "location_settings", "apps"], Field(description="Exact entity type to fetch. Use dedicated tools for centers, guardians, and students; this tool is for appointments/services/employees/resources/settings/apps only.")],
+    entityType: Annotated[Literal["appointments", "services", "employees", "resources", "group_settings", "company_settings", "location_settings", "apps"], Field(description="Exact entity type to fetch. For services, results include session-type membership links, grade-range links, durations, active status, and booking-rule metadata. Use dedicated tools for centers, guardians, and students.")],
     parentId: Annotated[Optional[str], Field(description="Required for appointments/services/resources (location-level parentId) and employees (company-level parentId). Not used for settings/apps context reads.")] = None,
     entityId: Annotated[Optional[str], Field(description="Optional exact entity id filter applied to list-like results. This is not fuzzy search.")] = None,
     companyId: Annotated[Optional[str], Field(description="Required for company_settings/apps and useful for GraphQL scoping. Use the companyId returned by mathnasium_find_center.")] = None,
@@ -123,7 +123,7 @@ async def mathnasium_get_entity(
     limit: Annotated[int, Field(description="Maximum list items to return, capped at 100.", ge=1, le=100)] = 25,
     refreshContext: Annotated[bool, Field(description="Force-refresh cached group context for context-backed entity types.")] = False,
 ) -> Dict[str, Any]:
-    """Get exact scoped Mathnasium entities not covered by center/guardian/student tools, such as appointments, services, employees, resources, settings, and apps."""
+    """Get scoped Mathnasium entities, including session-type membership, grade, duration, and booking-rule configuration."""
     config_error = require_config()
     if config_error:
         return config_error
