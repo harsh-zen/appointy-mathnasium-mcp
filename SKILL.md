@@ -165,6 +165,7 @@ Examples:
 
 Investigation tip:
 - If recent logs show success but the user reported missing data, search farther back for earlier failures and mention both in the support report.
+- The MCP automatically searches long ranges in newest-first chunks and omits raw payloads on the broad pass. Use the returned chunk metadata, then rerun only a relevant 48-hour-or-shorter window with `includePayload=true` when full request/response evidence is needed.
 
 ## Required support flow
 

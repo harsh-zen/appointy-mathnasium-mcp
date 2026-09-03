@@ -52,6 +52,11 @@ Optional:
 - `GCP_POD_APP_LABEL` (default `deployment`)
 - `GCP_LOG_DEFAULT_LOOKBACK_HOURS` (default `48`)
 - `GCP_LOG_MAX_LIMIT` (default `200`)
+- `GCP_LOG_CHUNK_HOURS` (default `48`)
+- `GCP_LOG_QUERY_TIMEOUT_SECONDS` (default `20` per chunk)
+- `GCP_LOG_TOTAL_TIMEOUT_SECONDS` (default `45` per MCP call)
+- `GCP_LOG_MAX_ATTEMPTS` (default `2` per chunk)
+- `GCP_LOG_RETRY_BACKOFF_SECONDS` (default `1`)
 
 ## Tool Input Notes
 
@@ -80,6 +85,8 @@ Optional:
   - Accepts `textTerms`, `identifiers`, `messages`, `queryIds`, `paths`, `endpointNames`, `statusCodes`, ISO `startTime`/`endTime`, and `matchAllTerms`.
   - For Radius wrapper sync logs, use `source="radius_wrappers"` with identifiers and optional `endpointNames` such as `customer-account`, `student`, or `appointment`.
   - Requires at least one meaningful filter; it will not run a broad unfiltered production log scan.
+  - Long date ranges are searched sequentially in newest-first 48-hour chunks. Results are deduplicated and share one global limit.
+  - Raw payloads are automatically omitted for long-range searches. After finding relevant timestamps, rerun a 48-hour-or-shorter window with `includePayload=true`.
 
 Transport/runtime (optional):
 

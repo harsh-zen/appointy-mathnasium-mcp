@@ -164,9 +164,9 @@ async def mathnasium_search_custom_logs(
     severityMin: Annotated[str, Field(description="Minimum Cloud Logging severity, default DEFAULT.")] = "DEFAULT",
     matchAllTerms: Annotated[bool, Field(description="When true, all textTerms/identifiers must match instead of any one matching.")] = False,
     limit: Annotated[int, Field(description="Maximum log entries to return, capped by GCP_LOG_MAX_LIMIT.", ge=1)] = 100,
-    includePayload: Annotated[bool, Field(description="Include raw log payloads in returned matches. Useful for deep investigation, but may expose sensitive production payload data.")] = True,
+    includePayload: Annotated[bool, Field(description="Include raw log payloads in returned matches. For ranges longer than the configured chunk size, payloads are automatically omitted; rerun the relevant narrow window to retrieve them.")] = True,
 ) -> Dict[str, Any]:
-    """Search Mathnasium production GKE logs with custom text/queryId/path/message filters without exposing raw Cloud Logging syntax."""
+    """Search Mathnasium production GKE logs using bounded newest-first chunks, retries, and a global result limit."""
     config_error = require_gcp_logging_config()
     if config_error:
         return config_error
