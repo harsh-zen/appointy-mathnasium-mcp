@@ -3,6 +3,7 @@ from typing import Annotated, Dict, List, Literal, Optional, Any
 from pydantic import Field
 
 from .app import mcp
+from .appointment_search import find_appointments
 from .clients import require_gcp_logging_config
 from .config import GROUP_CONTEXT_CACHE_TTL_SECONDS, require_config
 from .domain import (
@@ -147,6 +148,31 @@ async def mathnasium_get_entity(
         return {"status": "failed", "error": str(exc), "details": exc.payload}
     except Exception as exc:
         return {"status": "failed", "error": f"Unexpected error in entity lookup: {exc}"}
+
+
+@mcp.tool()
+async def mathnasium_find_appointments(
+    student_id: Annotated[Optional[str], Field(description="Student ID. Filters calendar results to appointments containing this student.")] = None,
+    customer_id: Annotated[Optional[str], Field(description="Guardian/customer ID. Filters appointments by booked customer or student's primary guardian.")] = None,
+    location_id: Annotated[Optional[str], Field(description="Center location ID. Combine with an entity ID or a date window; location alone is rejected.")] = None,
+    start_from: Annotated[Optional[str], Field(description="Inclusive ISO 8601 appointment-start lower bound. Supply together with start_to; maximum window 62 days.")] = None,
+    start_to: Annotated[Optional[str], Field(description="Inclusive ISO 8601 appointment-start upper bound. Supply together with start_from; maximum window 62 days.")] = None,
+    status: Annotated[Optional[List[str]], Field(description="One or more appointment status values, such as CONFIRMED or CANCELLED. Combined with other filters using AND.")] = None,
+    recurring_id: Annotated[Optional[str], Field(description="Recurring series ID, e.g. rec_...; filters returned occurrences.")] = None,
+    order: Annotated[Optional[Literal["asc", "desc"]], Field(description="Sort by appointment start ascending or descending. Omit for nearest to current time first.")] = None,
+    cursor: Annotated[Optional[str], Field(description="next_cursor from the previous page using identical filters.")] = None,
+    page_size: Annotated[int, Field(description="Results per page; default 25, maximum 50.", ge=1, le=50)] = 25,
+) -> Dict[str, Any]:
+    """Search a bounded appointment calendar by student, guardian, center, dates, status, or recurring series; read-only. Calendar is queried by time and scope, then entity/status filters and cursor paging are applied locally."""
+    config_error = require_config()
+    if config_error:
+        return config_error
+    try:
+        return await find_appointments(student_id=student_id, customer_id=customer_id, location_id=location_id,
+                                       start_from=start_from, start_to=start_to, status=status,
+                                       recurring_id=recurring_id, order=order, cursor=cursor, page_size=page_size)
+    except AppointyApiError as exc:
+        return {"status": "failed", "error": str(exc), "details": exc.payload}
 
 
 @mcp.tool()

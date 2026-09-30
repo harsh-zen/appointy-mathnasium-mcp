@@ -1,0 +1,1 @@
+- Added experimental, read-only `mathnasium_find_appointments` with bounded calendar filtering and cursor paging.

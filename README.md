@@ -137,3 +137,8 @@ docker run --rm -p 8080:8080 \
   -e GCP_PROJECT_ID \
   appointy-mathnasium-mcp
 ```
+# Appointment lookup (experimental)
+
+`mathnasium_find_appointments` searches the GraphQL appointment calendar by a bounded start-time window and optional center, student, guardian, status, or recurring-series filters. Supply both `start_from` and `start_to` as timezone-aware ISO 8601 timestamps (at most 62 days); without dates, an entity ID search uses a 62-day window centered on the current time. A center ID alone is not enough. The default page size is 25 (maximum 50); pass `next_cursor` as `cursor` for another page.
+
+The upstream calendar query is scoped by time and parent. Student, guardian, status, and recurring-series filters, ordering, and paging are applied by this MCP after retrieval. This is not a server-side index or a stable snapshot: changes between page calls can shift results. If no `location_id` is given, the group is used as the calendar parent; verify that group-scoped calendar access is supported before relying on this path in production. `cancelled_at` is omitted because the captured GraphQL query does not expose a verified cancellation timestamp.
