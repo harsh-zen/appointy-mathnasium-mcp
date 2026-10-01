@@ -425,6 +425,8 @@ query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
     }
   }
 }
+
+
 """.strip(),
     ),
     "employees": (
@@ -466,3 +468,30 @@ query MathnasiumEntityResourcesQuery($parent: String!, $first: Int!) {
 """.strip(),
     ),
 }
+
+GRAPHQL_APPOINTMENT_CALENDAR_QUERY = """
+query MathnasiumSupportAppointmentCalendar($startTime: Timestamp, $endTime: Timestamp, $parents: [String]) {
+  appointmentCalendar(startTime: $startTime, endTime: $endTime, parents: $parents) {
+    appointments {
+      id
+      status
+      recurringId
+      source
+      timeSlot { startTime endTime }
+      service { _id }
+      consumers {
+        _id
+        status
+        timezone
+        original {
+          __typename
+          ... on Node { id }
+          ... on Student { primaryGuardian { id } }
+        }
+      }
+      booked_on
+      emailOfBookedBy
+    }
+  }
+}
+""".strip()
