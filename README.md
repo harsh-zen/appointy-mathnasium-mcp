@@ -15,6 +15,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
+- `mathnasium_find_appointments`
 - `mathnasium_search_custom_logs`
 
 ## Data Source Notes:
@@ -22,7 +23,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_get_group_context` uses GraphQL `AppQuery`.
 - `mathnasium_find_center` uses cached GraphQL context index.
 - `mathnasium_find_guardian` is GraphQL-first (`customers`) with guardian-student enrichment from `CustomerDetailQuery`.
-- `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
+- `mathnasium_find_student` uses verified group-scoped `mathnasiumSearchEntity(type: Student)` and hydrates validated IDs; guardian-scoped reads retain `students(guardianId: ...)`.
 - `mathnasium_get_entity` is a common read-only entity lookup for objects not covered by the first-class center/guardian/student tools.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
 - `mathnasium_search_custom_logs` searches the same production GKE logs using custom text, queryId, path, message, and endpoint filters without exposing raw Cloud Logging syntax.
@@ -54,7 +55,7 @@ Optional:
 - `GCP_LOG_MAX_LIMIT` (default `200`)
 - `GCP_LOG_CHUNK_HOURS` (default `48`)
 - `GCP_LOG_QUERY_TIMEOUT_SECONDS` (default `20` per chunk)
-- `GCP_LOG_TOTAL_TIMEOUT_SECONDS` (default `45` per MCP call)
+- `GCP_LOG_TOTAL_TIMEOUT_SECONDS` (default `45`; effective application cap is `25` seconds)
 - `GCP_LOG_MAX_ATTEMPTS` (default `2` per chunk)
 - `GCP_LOG_RETRY_BACKOFF_SECONDS` (default `1`)
 
@@ -137,8 +138,71 @@ docker run --rm -p 8080:8080 \
   -e GCP_PROJECT_ID \
   appointy-mathnasium-mcp
 ```
-# Appointment lookup (experimental)
+## Verified Support Reads (API key)
 
-`mathnasium_find_appointments` searches the GraphQL appointment calendar by a bounded start-time window and optional center, student, guardian, status, or recurring-series filters. Supply both `start_from` and `start_to` as timezone-aware ISO 8601 timestamps (at most 62 days); without dates, an entity ID search uses a 62-day window centered on the current time. A center ID alone is not enough. The default page size is 25 (maximum 50); pass `next_cursor` as `cursor` for another page.
+The support additions use existing GraphQL reads, not new Appointy backend endpoints.
+`mathnasium_get_entity` accepts these additional exact `entityType` values:
 
-The upstream calendar query is scoped by time and parent. Student, guardian, status, and recurring-series filters, ordering, and paging are applied by this MCP after retrieval. This is not a server-side index or a stable snapshot: changes between page calls can shift results. If no `location_id` is given, the group is used as the calendar parent; verify that group-scoped calendar access is supported before relying on this path in production. `cancelled_at` is omitted because the captured GraphQL query does not expose a verified cancellation timestamp.
+| Type | Required arguments | Meaning / limits |
+| --- | --- | --- |
+| `booking_rules` | location `parentId` | Location rules; optional `serviceId` reads the service override. Interpret `policyType` before interval values. |
+| `portal_settings` | location `parentId` | Guardian portal/booking and recurring-booking toggles. |
+| `availability_rules` | location `parentId` | Configured current/expired blocks, recurrence, services, resources and capacity; native cursor. |
+| `availability_window` | location `parentId`, `startFrom`, `startTo` | Rules intersecting a window up to 31 days; bounded local continuation. |
+| `bookable_slots` | location `parentId`, `studentId`, `enrollmentId`, `serviceId`, `durationSeconds`, dates | Existing slot and eligible-service results; at most 7 days. Empty slots are not a complete diagnosis. |
+| `bookable_durations` | location `parentId`, `studentId`, `serviceId`, dates | Durations in seconds; at most 7 days. |
+| `enrollment_balance` | `studentId`, `guardianId` | Monthly remaining-bookable buckets; set the actual `timezone`. Not attendance counts or Radius history. |
+| `recurring_series` | seed appointment `entityId` | Series occurrences and recurrence rule. Direct `rec_` ID lookup is not available with the key. |
+| `attendance_statuses` | location `parentId` | Custom attendance names/IDs such as No-show, separate from overall appointment status. |
+| `activity_logs` | `parentId`, dates | Audit evidence up to 90 days; optional exact `eventIds`; offset wrapped in a filter-bound cursor. Deleted snapshots can be incomplete. |
+| `guardian_profile` | guardian `entityId` | Stored profile timezone and available audit dates. |
+| `student_audit` | student `entityId` | Explicit audit field-mask read. |
+| `record_metadata` | `companyId`, optional `locationId` | Raw and decoded metadata, including separately stored AutoInvites; unknown timestamps remain null. |
+| `instructor_services` | location `parentId`, `instructorId` | Assigned services with native pagination. |
+| `consumer_appointment_count` | location `parentId`, `studentId` or `guardianId` | Undated upstream counter, not a monthly usage report. |
+| `radius_student` | Radius student ID in `entityId` | Current wrapper projection, not last received payload/history. |
+
+Use full IDs returned by lookup. Short company IDs are supported; short location IDs
+need a company or a unique center-context match. Never substitute IDs from another group.
+For list reads, follow `next_cursor` with identical filters until `has_more=false`.
+The local continuation used for slots/window reads re-fetches the bounded window; it
+is not a snapshot and results can move if availability changes.
+
+`employees` now includes roles with their applicable scope, module names, location
+assignments and profile timezone. `employees` and `services` paginate with native cursors.
+Settings lookups accept short/full company/location IDs and fall back to a direct read
+when an otherwise valid record is absent from cached group context.
+
+### Filtered appointments
+
+Use `mathnasium_find_appointments` (or `get_entity` type `appointments` with
+`studentId`/`guardianId`, `startFrom`/`startTo`, `parentId` and `cursor`).
+Student, booking-customer, date and overall status filters execute upstream.
+The dedicated tool also accepts `custom_status_ids` from `attendance_statuses`.
+Default order is newest first; `order=asc` is supported. At most 50 rows per page,
+with a native filter-bound continuation. A location alone is rejected; provide an
+identity or a positive date window no longer than 62 days. When dates are omitted
+with an identity, the default is 31 days before through 31 days after now.
+An overall `APPOINTMENT_*` status is not an attendance label. Creator IDs do not
+by themselves identify a Radius sync. History is evidence, not a fabricated actor/source.
+
+### Log search continuation
+
+`mathnasium_search_custom_logs` reads one native GCP page (up to 50 rows) before
+returning, and scans empty newest-first chunks within a hard application budget of
+at most 25 seconds. The GCP RPC has an explicit timeout and automatic SDK retries
+are disabled; application retry attempts remain bounded by that deadline.
+Use `cursor` with the identical arguments for `next_cursor`. A timed-out chunk
+returns `partial=true`, a reason and a retryable continuation, not an empty success.
+`summaryOnly=true` omits rows and returns **page-level** counts/latest error, not a
+full-window aggregate. A partial/limited search never proves that no request exists.
+Infrastructure/proxy 503s outside the application cannot be guaranteed absent.
+Name/identifier search retains existing text-match semantics; exact structured-field
+indexing is not claimed by these changes.
+
+### Excluded backend gaps
+
+No utilization/overbooking/notification report access, direct recurring-ID reads,
+provider delivery/suppression, sync/balance history, complete deleted-availability
+snapshots or authoritative all-reasons eligibility endpoint is added. Null audit
+fields remain unknown. There are no writes, new authentication settings or deployment changes.

@@ -14,6 +14,7 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
+- `mathnasium_find_appointments`
 - `mathnasium_search_custom_logs`
 
 ## When to use
@@ -232,3 +233,35 @@ For log lookup, return:
 - This skill is for data lookup only (read workflows).
 - Do not infer write/mutation actions from these tools.
 - Treat lookup results as evidence to guide support replies and escalations.
+
+## Verified booking/configuration investigation
+
+Use exact `mathnasium_get_entity` types, not guessed GraphQL or entity-name matching:
+
+- `booking_rules`: location `parentId`, optional `serviceId` for its override. `AllowUpdate` means any time even when a retained interval is nonzero. Do not infer a company-default hierarchy.
+- `portal_settings`: location `parentId`; portal and recurring-booking toggles.
+- `record_metadata`: `companyId` and optional `locationId`; compare decoded AutoInvites values separately, without inventing inheritance.
+- `availability_rules`: location `parentId`, `cursor`; configured current/expired rules. `availability_window` adds `startFrom`/`startTo` (up to 31 days).
+- `bookable_slots`: location `parentId`, `studentId`, `enrollmentId`, `serviceId`, `durationSeconds`, dates (up to 7 days), actual `timezone`. `bookable_durations` needs location/student/service/dates, returning seconds. Empty results do not confirm an exhaustive cause.
+- `enrollment_balance`: confirmed `studentId`, `guardianId`, actual `timezone`; remaining-bookable buckets, not booked/attended counts or Radius history.
+- `attendance_statuses`: location parent; obtain exact IDs for appointment `custom_status_ids` (No-show etc).
+- `recurring_series`: confirmed seed appointment in `entityId`, not `rec_...` alone.
+- `activity_logs`: scoped `parentId`, dates up to 90 days, optional `eventIds`; `ale_223`/`ale_224` are deletion evidence, not guaranteed complete before-state.
+- `guardian_profile`, `student_audit`: exact `entityId`; preserve unknown timestamps.
+- `instructor_services`: location `parentId`, `instructorId`, cursor. Employee results include role scope/module names; don't treat a role at another location as effective here.
+- `consumer_appointment_count`: location and student/guardian; no date filtering.
+- `radius_student`: exact Radius student ID in `entityId`; current projection only.
+
+For appointments use `mathnasium_find_appointments` with student/customer/location,
+`start_from`/`start_to`, optional overall `status`, and `cursor`. Newest first by
+default; `order=asc` is supported. Attendance is separate from overall status.
+Location alone is insufficient. Use a date window at most 62 days; confirm timezone
+before converting a ticket's local date-time to ISO timestamps. Never infer absence
+from the first page. Creator ID is evidence, not a guaranteed sync-source label.
+
+Follow every `next_cursor` with identical filters. Availability's local continuation
+re-reads a bounded window and is not a stable snapshot. For logs, use `cursor` to
+continue partial searches. `summaryOnly` summarizes the returned page, not the whole
+time range. A timeout, `partial=true`, or remaining cursor is not proof of no request.
+Do not call blocked reports or claim email delivery, sync history or complete
+eligibility explanations are available.

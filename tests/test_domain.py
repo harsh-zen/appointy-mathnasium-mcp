@@ -40,7 +40,6 @@ class DomainLogicTests(unittest.TestCase):
             "inactive",
         )
 
-
     def test_center_booking_url_prefers_company_slug_for_support(self):
         company = {
             "id": "grp_1/com_gurmeet",
@@ -58,11 +57,21 @@ class DomainLogicTests(unittest.TestCase):
 
         parsed = domain._parse_location_node(location, company)
 
-        self.assertEqual(parsed["bookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(
+            parsed["bookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc"
+        )
         self.assertEqual(parsed["bookingUrlLevel"], "company")
-        self.assertEqual(parsed["companyBookingUrl"], "https://mathnasium-booking.appointy.com/gurmeetc")
-        self.assertEqual(parsed["locationBookingUrl"], "https://mathnasium-booking.appointy.com/mathnasium1947l")
-        self.assertEqual(parsed["bookingUrls"][0], "https://mathnasium-booking.appointy.com/gurmeetc")
+        self.assertEqual(
+            parsed["companyBookingUrl"],
+            "https://mathnasium-booking.appointy.com/gurmeetc",
+        )
+        self.assertEqual(
+            parsed["locationBookingUrl"],
+            "https://mathnasium-booking.appointy.com/mathnasium1947l",
+        )
+        self.assertEqual(
+            parsed["bookingUrls"][0], "https://mathnasium-booking.appointy.com/gurmeetc"
+        )
 
     def test_resolve_guardian_parent_scope_accepts_short_location_id(self):
         context = {
@@ -135,7 +144,9 @@ class GuardianLookupTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(domain, "appointy", FakeAppointy()),
             patch.object(domain, "_get_group_context_cached", fake_context),
-            patch.object(domain, "MATHNASIUM_GROUP_ID", "grp_01HA9WW1JPRN80YE0DS6ZJJN88"),
+            patch.object(
+                domain, "MATHNASIUM_GROUP_ID", "grp_01HA9WW1JPRN80YE0DS6ZJJN88"
+            ),
         ):
             result = await domain._find_guardians_internal(
                 parent_id="grp_01HA9WW1JPRN80YE0DS6ZJJN88/com_1",
@@ -170,8 +181,12 @@ class EntityLookupTests(unittest.IsolatedAsyncioTestCase):
                                         "durations": [1800, 3600],
                                         "mathnasiumServiceLinks": {
                                             "id": "math_1",
-                                            "memberships": [{"id": "mem_33986", "name": "Monthly"}],
-                                            "grades": [{"id": "grd_14594", "name": "Grade 6"}],
+                                            "memberships": [
+                                                {"id": "mem_33986", "name": "Monthly"}
+                                            ],
+                                            "grades": [
+                                                {"id": "grd_14594", "name": "Grade 6"}
+                                            ],
                                         },
                                         "settings": {
                                             "bookingRules": {
@@ -187,7 +202,10 @@ class EntityLookupTests(unittest.IsolatedAsyncioTestCase):
                     "errors": None,
                 }
 
-        with patch.object(domain, "appointy", FakeAppointy()):
+        with (
+            patch.object(domain, "appointy", FakeAppointy()),
+            patch("appointy_mathnasium_mcp.scopes.MATHNASIUM_GROUP_ID", "grp_1"),
+        ):
             result = await domain._get_graphql_entity_internal(
                 entity_type="services",
                 parent_id="grp_1/com_1/loc_1",
@@ -203,7 +221,9 @@ class EntityLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service["durationsMinutes"], [30.0, 60.0])
         self.assertTrue(service["hasMembershipLinks"])
         self.assertTrue(service["hasGradeRangeLinks"])
-        self.assertEqual(service["settings"]["bookingRules"]["availabilityType"], "AUTOMATIC")
+        self.assertEqual(
+            service["settings"]["bookingRules"]["availabilityType"], "AUTOMATIC"
+        )
 
 
 if __name__ == "__main__":

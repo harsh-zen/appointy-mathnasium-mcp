@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 import asyncio
 import httpx
 
+from . import support_queries
 from .config import (
     APPOINTY_API_BASE_URL,
     APPOINTY_API_KEY,
@@ -27,7 +28,6 @@ from .queries import (
     GRAPHQL_APP_QUERY,
     GRAPHQL_FIND_GUARDIANS_QUERY,
     GRAPHQL_FIND_STUDENTS_QUERY,
-    GRAPHQL_FIND_STUDENTS_QUERY_NO_GUARDIAN,
     GRAPHQL_STUDENT_DETAIL_QUERY,
     GRAPHQL_GUARDIAN_DETAIL_QUERY,
 )
@@ -229,21 +229,52 @@ class AppointyClient:
         company_scope_id: Optional[str] = None,
         location_id: Optional[str] = None,
     ) -> Any:
-        if guardian_id:
-            query = GRAPHQL_FIND_STUDENTS_QUERY
-            variables = {
-                "parent": parent_id,
-                "first": max(1, min(limit, 100)),
-                "query": student_name or None,
-                "guardianId": guardian_id,
-            }
-        else:
-            query = GRAPHQL_FIND_STUDENTS_QUERY_NO_GUARDIAN
-            variables = {
-                "parent": parent_id,
-                "first": max(1, min(limit, 100)),
-                "query": student_name or None,
-            }
+        if not guardian_id:
+            if not student_name:
+                return {"data": {"students": {"edges": []}}}
+            from .support_queries import STUDENT_SEARCH
+
+            payload = await self._graphql(
+                query_id="SupportRead",
+                query=STUDENT_SEARCH,
+                variables={"g": MATHNASIUM_GROUP_ID, "q": student_name},
+            )
+            if payload.get("errors"):
+                raise AppointyApiError(
+                    "Group student search failed", payload=payload["errors"]
+                )
+            import base64
+            import json
+
+            encoded = (
+                (payload.get("data") or {}).get("mathnasiumSearchEntity") or {}
+            ).get("encodedData")
+            rows = json.loads(base64.b64decode(encoded)) if encoded else []
+            edges = []
+            for row in rows:
+                sid = row.get("appointy_id", "")
+                if not sid.startswith(f"{MATHNASIUM_GROUP_ID}/"):
+                    continue
+                detail = await self.get_student_detail_graphql(
+                    company_id="/".join(sid.split("/")[:2]), student_id=sid
+                )
+                if detail.get("errors"):
+                    raise AppointyApiError(
+                        "Student hydration failed", payload=detail["errors"]
+                    )
+                node = (detail.get("data") or {}).get("student")
+                if node and node.get("id") == sid:
+                    edges.append({"node": node})
+                if len(edges) >= limit:
+                    break
+            return {"data": {"students": {"edges": edges}}, "_detailsHydrated": True}
+        query = GRAPHQL_FIND_STUDENTS_QUERY
+        variables = {
+            "parent": parent_id,
+            "first": max(1, min(limit, 100)),
+            "query": student_name or None,
+            "guardianId": guardian_id,
+        }
         return await self._graphql(
             query_id="FindStudentQuery",
             query=query,
@@ -259,13 +290,35 @@ class AppointyClient:
         student_id: str,
         location_id: Optional[str] = None,
     ) -> Any:
-        return await self._graphql(
+        payload = await self._graphql(
             query_id="StudentDetailQuery",
             query=GRAPHQL_STUDENT_DETAIL_QUERY,
             variables={"id": student_id},
             company_id=company_id,
             location_id=location_id,
         )
+        if payload.get("errors"):
+            raise AppointyApiError(
+                "Student detail read failed", payload=payload["errors"]
+            )
+        audit = await self._graphql(
+            query_id="SupportRead",
+            query=support_queries.STUDENT_TIMESTAMPS,
+            variables={"id": student_id},
+            company_id=company_id,
+            location_id=location_id,
+        )
+        if not audit.get("errors") and (audit.get("data") or {}).get("student"):
+            node = (payload.get("data") or {}).get("student")
+            if node and node.get("id") == student_id:
+                node.update(
+                    {
+                        k: v
+                        for k, v in audit["data"]["student"].items()
+                        if k in {"createdOn", "updatedOn"}
+                    }
+                )
+        return payload
 
     async def get_companies(self, *, query: Optional[str] = None, limit: int = 50) -> Any:
         params: Dict[str, Any] = {
@@ -302,25 +355,56 @@ class GcpLoggingClient:
     def __init__(self) -> None:
         self.project_id = GCP_PROJECT_ID
 
-    def _list_entries_sync(self, *, filter_: str, limit: int) -> List[Any]:
+    def _list_page_sync(
+        self, *, filter_: str, limit: int, page_token: Optional[str], timeout: float
+    ):
         _ensure_google_credentials_file()
         error = require_gcp_logging_config()
         if error:
             raise GcpLoggingError(error["error"], payload=error)
-        client = logging_v2.Client(project=self.project_id)  # type: ignore[union-attr]
-        return list(
-            client.list_entries(
-                resource_names=[f"projects/{self.project_id}"],
-                filter_=filter_,
-                order_by=logging_v2.DESCENDING,  # type: ignore[union-attr]
-                page_size=max(1, min(limit, GCP_LOG_MAX_LIMIT)),
-                max_results=max(1, min(limit, GCP_LOG_MAX_LIMIT)),
-            )
+        from google.cloud.logging_v2.services.logging_service_v2 import (
+            LoggingServiceV2Client,
         )
+        from google.cloud.logging_v2.entries import StructEntry, TextEntry, ProtobufEntry
 
-    async def list_entries(self, *, filter_: str, limit: int) -> List[Any]:
+        client = LoggingServiceV2Client()
         try:
-            return await asyncio.to_thread(self._list_entries_sync, filter_=filter_, limit=limit)
+            pager = client.list_log_entries(
+                request={
+                    "resource_names": [f"projects/{self.project_id}"],
+                    "filter": filter_,
+                    "order_by": "timestamp desc",
+                    "page_size": limit,
+                    "page_token": page_token or "",
+                },
+                retry=None,
+                timeout=timeout,
+            )
+            # Read one RPC response only. Iterating the pager would fetch every page.
+            response = next(iter(pager.pages))
+            entry_client = logging_v2.Client(project=self.project_id)
+            entries = []
+            for entry in response.entries:
+                resource = type(entry).to_dict(
+                    entry, preserving_proto_field_name=False, use_integers_for_enums=False
+                )
+                kind = StructEntry if "jsonPayload" in resource else TextEntry if "textPayload" in resource else ProtobufEntry
+                entries.append(kind.from_api_repr(resource, entry_client))
+            return entries, response.next_page_token or None
+        finally:
+            client.transport.close()
+
+    async def list_page(
+        self, *, filter_: str, limit: int, page_token=None, timeout: float = 20
+    ):
+        try:
+            return await asyncio.to_thread(
+                self._list_page_sync,
+                filter_=filter_,
+                limit=limit,
+                page_token=page_token,
+                timeout=timeout,
+            )
         except GcpLoggingError:
             raise
         except Exception as exc:

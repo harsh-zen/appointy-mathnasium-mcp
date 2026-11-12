@@ -41,6 +41,7 @@ _TRANSIENT_GCP_ERROR_MARKERS = (
     "remoteprotocolerror",
     "temporarily unavailable",
     "timeout",
+    "timed out",
     "unavailable",
 )
 
@@ -76,7 +77,9 @@ def _is_transient_gcp_error(exc: Exception) -> bool:
     return any(marker in message for marker in _TRANSIENT_GCP_ERROR_MARKERS)
 
 
-async def _list_entries_with_retry(*, query: str, limit: int, deadline: float) -> Tuple[List[Any], int]:
+async def _list_entries_with_retry(
+    *, query: str, limit: int, deadline: float, page_token=None
+):
     attempts = max(1, GCP_LOG_MAX_ATTEMPTS)
     for attempt in range(1, attempts + 1):
         remaining_budget = deadline - time.monotonic()
@@ -84,10 +87,17 @@ async def _list_entries_with_retry(*, query: str, limit: int, deadline: float) -
             raise GcpLoggingError("Log search reached its total execution-time budget.")
         try:
             entries = await asyncio.wait_for(
-                gcp_logging.list_entries(filter_=query, limit=limit),
+                gcp_logging.list_page(
+                    filter_=query,
+                    limit=limit,
+                    page_token=page_token,
+                    timeout=min(
+                        max(1, GCP_LOG_QUERY_TIMEOUT_SECONDS), remaining_budget
+                    ),
+                ),
                 timeout=min(max(1, GCP_LOG_QUERY_TIMEOUT_SECONDS), remaining_budget),
             )
-            return entries, attempt
+            return entries[0], entries[1], attempt
         except asyncio.TimeoutError as exc:
             raise GcpLoggingError(
                 f"A log-search chunk timed out after {max(1, GCP_LOG_QUERY_TIMEOUT_SECONDS)} seconds."
@@ -271,28 +281,67 @@ async def _search_custom_logs_internal(
     match_all_terms: bool,
     limit: int,
     include_payload: bool,
+    cursor: Optional[str] = None,
+    summary_only: bool = False,
 ) -> Dict[str, Any]:
-    if not any([text_terms, identifiers, messages, query_ids, paths, endpoint_names, status_codes]):
+    if not any(
+        [
+            text_terms,
+            identifiers,
+            messages,
+            query_ids,
+            paths,
+            endpoint_names,
+            status_codes,
+        ]
+    ):
         return {
             "status": "failed",
             "error": "Provide at least one filter: textTerms, identifiers, messages, queryIds, paths, endpointNames, or statusCodes.",
             "matches": [],
         }
 
-    limit = max(1, min(limit, GCP_LOG_MAX_LIMIT))
-    logical_query, resolved_start, resolved_end, match_terms = _build_custom_logs_filter(
+    from .support_reads import decode_cursor, encode_cursor
+
+    filters = dict(
         source=source,
-        text_terms=text_terms,
+        textTerms=text_terms,
         identifiers=identifiers,
         messages=messages,
-        query_ids=query_ids,
+        queryIds=query_ids,
         paths=paths,
-        endpoint_names=endpoint_names,
-        status_codes=status_codes,
-        start_time=start_time,
-        end_time=end_time,
-        severity_min=severity_min or "DEFAULT",
-        match_all_terms=match_all_terms,
+        endpointNames=endpoint_names,
+        statusCodes=status_codes,
+        startTime=start_time,
+        endTime=end_time,
+        severityMin=severity_min,
+        matchAllTerms=match_all_terms,
+        limit=limit,
+        includePayload=include_payload,
+        summaryOnly=summary_only,
+    )
+    try:
+        continuation = decode_cursor(cursor, filters) or {}
+        if not isinstance(continuation, dict):
+            raise ValueError("Invalid log cursor.")
+    except ValueError as exc:
+        return {"status": "failed", "error": str(exc), "matches": []}
+    limit = max(1, min(limit, GCP_LOG_MAX_LIMIT, 50))
+    logical_query, resolved_start, resolved_end, match_terms = (
+        _build_custom_logs_filter(
+            source=source,
+            text_terms=text_terms,
+            identifiers=identifiers,
+            messages=messages,
+            query_ids=query_ids,
+            paths=paths,
+            endpoint_names=endpoint_names,
+            status_codes=status_codes,
+            start_time=continuation.get("start", start_time),
+            end_time=continuation.get("end", end_time),
+            severity_min=severity_min or "DEFAULT",
+            match_all_terms=match_all_terms,
+        )
     )
     chunks = _split_time_range(
         resolved_start,
@@ -301,7 +350,7 @@ async def _search_custom_logs_internal(
     )
     is_chunked = len(chunks) > 1
     effective_include_payload = include_payload and not is_chunked
-    deadline = time.monotonic() + max(1, GCP_LOG_TOTAL_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + min(25, max(1, GCP_LOG_TOTAL_TIMEOUT_SECONDS))
     matches: List[Dict[str, Any]] = []
     seen_matches = set()
     chunk_results: List[Dict[str, Any]] = []
@@ -317,14 +366,30 @@ async def _search_custom_logs_internal(
             "includePayload=true for full payloads."
         )
 
-    for chunk_start, chunk_end in chunks:
+    chunk_index = continuation.get("chunk", 0)
+    page_token = continuation.get("page")
+    if not isinstance(chunk_index, int) or not 0 <= chunk_index < len(chunks):
+        return {"status": "failed", "error": "Invalid log cursor chunk.", "matches": []}
+    next_state = None
+    while chunk_index < len(chunks):
+        chunk_start, chunk_end = chunks[chunk_index]
+        next_state = {
+            "start": resolved_start,
+            "end": resolved_end,
+            "chunk": chunk_index,
+            "page": page_token,
+        }
         if len(matches) >= limit:
             stop_reason = "result_limit"
-            warnings.append("Stopped searching older chunks after reaching the requested global result limit.")
+            warnings.append(
+                "Stopped searching older chunks after reaching the requested global result limit."
+            )
             break
         if time.monotonic() >= deadline:
             stop_reason = "time_budget"
-            warnings.append("Stopped searching older chunks after reaching the MCP execution-time budget.")
+            warnings.append(
+                "Stopped searching older chunks after reaching the MCP execution-time budget."
+            )
             break
 
         chunk_query, _, _, _ = _build_custom_logs_filter(
@@ -341,11 +406,16 @@ async def _search_custom_logs_internal(
             severity_min=severity_min or "DEFAULT",
             match_all_terms=match_all_terms,
         )
+        if chunk_index > 0:
+            chunk_query = chunk_query.replace(
+                f'timestamp<="{chunk_end}"', f'timestamp<"{chunk_end}"'
+            )
         try:
-            entries, attempts = await _list_entries_with_retry(
+            entries, following_page, attempts = await _list_entries_with_retry(
                 query=chunk_query,
-                limit=limit - len(matches),
+                limit=limit,
                 deadline=deadline,
+                page_token=page_token,
             )
         except GcpLoggingError as exc:
             last_chunk_error = exc
@@ -362,24 +432,25 @@ async def _search_custom_logs_internal(
             if not _is_transient_gcp_error(exc):
                 if not successful_chunks:
                     raise
-                break
-            continue
+            stop_reason = "upstream_timeout_or_error"
+            break
 
         successful_chunks += 1
         added = 0
         for entry in entries:
-            row = _entry_to_dict(entry, identifiers=match_terms, include_payload=effective_include_payload)
-            dedupe_key = (
-                row.get("insertId")
-                or "|".join(
-                    [
-                        _to_text(row.get("timestamp")),
-                        _to_text(row.get("logName")),
-                        _to_text(row.get("message")),
-                        _to_text(row.get("endpoint")),
-                        _to_text(row.get("errorMessage")),
-                    ]
-                )
+            row = _entry_to_dict(
+                entry,
+                identifiers=match_terms,
+                include_payload=effective_include_payload,
+            )
+            dedupe_key = row.get("insertId") or "|".join(
+                [
+                    _to_text(row.get("timestamp")),
+                    _to_text(row.get("logName")),
+                    _to_text(row.get("message")),
+                    _to_text(row.get("endpoint")),
+                    _to_text(row.get("errorMessage")),
+                ]
             )
             if dedupe_key in seen_matches:
                 continue
@@ -388,6 +459,19 @@ async def _search_custom_logs_internal(
             added += 1
             if len(matches) >= limit:
                 break
+        page_token = following_page
+        if not following_page:
+            chunk_index += 1
+        next_state = (
+            {
+                "start": resolved_start,
+                "end": resolved_end,
+                "chunk": chunk_index,
+                "page": page_token,
+            }
+            if chunk_index < len(chunks)
+            else None
+        )
         chunk_results.append(
             {
                 "startTime": chunk_start,
@@ -397,9 +481,9 @@ async def _search_custom_logs_internal(
                 "attempts": attempts,
             }
         )
-
-    if not successful_chunks and last_chunk_error is not None:
-        raise last_chunk_error
+        if added:
+            stop_reason = "page_limit" if next_state else ""
+            break
 
     matches.sort(key=lambda row: _to_text(row.get("timestamp")), reverse=True)
     matches = matches[:limit]
@@ -411,11 +495,17 @@ async def _search_custom_logs_internal(
         severity = _to_text(row.get("severity")) or "unknown"
         messages_summary[message] = messages_summary.get(message, 0) + 1
         severities_summary[severity] = severities_summary.get(severity, 0) + 1
-    range_complete = len(chunk_results) == len(chunks) and all(
-        chunk.get("status") == "success" for chunk in chunk_results
-    )
+    range_complete = next_state is None
+    endpoint_summary = {}
+    for row in matches:
+        key = f"{row.get('endpoint') or 'unknown'} | {row.get('message') or 'unknown'}"
+        endpoint_summary[key] = endpoint_summary.get(key, 0) + 1
     return {
-        "status": "success" if range_complete or stop_reason == "result_limit" else "partial",
+        "status": "success" if range_complete else "partial",
+        "partial": not range_complete,
+        "reason": stop_reason or ("more_results" if next_state else ""),
+        "has_more": next_state is not None,
+        "next_cursor": encode_cursor(next_state, filters) if next_state else None,
         "source": source or "all",
         "queryUsed": logical_query,
         "timeRange": {
@@ -433,8 +523,13 @@ async def _search_custom_logs_internal(
             "payloadIncluded": effective_include_payload,
             "chunks": chunk_results,
         },
-        "matches": matches,
+        "matches": [] if summary_only else matches,
         "summary": {
+            "coverage": "returned page only, not a full-window aggregate",
+            "byEndpointAndMessage": endpoint_summary,
+            "latestError": next(
+                (r.get("errorMessage") for r in matches if r.get("errorMessage")), None
+            ),
             "total": len(matches),
             "messages": messages_summary,
             "severities": severities_summary,

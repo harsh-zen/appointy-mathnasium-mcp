@@ -134,6 +134,7 @@ query FindGuardianQuery(
         phoneNumber
         customCustomerId
         metadata
+        createdOn updatedOn timezone userProfileTimezone
       }
     }
   }
@@ -387,8 +388,8 @@ query MathnasiumEntityAppointmentsQuery($parent: String!, $first: Int!) {
         "MathnasiumEntityServicesQuery",
         "services",
         """
-query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
-  services(parent: $parent, first: $first) {
+query MathnasiumEntityServicesQuery($parent: String!, $first: Int!, $after: String) {
+  services(parent: $parent, first: $first, after: $after) {
     edges {
       node {
         id
@@ -423,6 +424,7 @@ query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
         }
       }
     }
+    pageInfo { hasNextPage endCursor }
   }
 }
 
@@ -433,8 +435,8 @@ query MathnasiumEntityServicesQuery($parent: String!, $first: Int!) {
         "MathnasiumEntityEmployeesQuery",
         "employees",
         """
-query MathnasiumEntityEmployeesQuery($parent: String!, $first: Int!) {
-  employees(parent: $parent, first: $first) {
+query MathnasiumEntityEmployeesQuery($parent: String!, $first: Int!, $after: String) {
+  employees(parent: $parent, first: $first, after: $after) {
     edges {
       node {
         id
@@ -443,8 +445,13 @@ query MathnasiumEntityEmployeesQuery($parent: String!, $first: Int!) {
         email
         phoneNumber
         active
+        userId timeZone createdOn updatedOn
+        locations { id name }
+        userProfile { id preferences { timezone } }
+        roles { id userId role { levelId roleId role { id roleName level moduleRoleNames } } }
       }
     }
+    pageInfo { hasNextPage endCursor }
   }
 }
 """.strip(),
