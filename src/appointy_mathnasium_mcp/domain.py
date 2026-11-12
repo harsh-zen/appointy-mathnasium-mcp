@@ -6,6 +6,7 @@ from . import support_queries
 from .clients import appointy
 from .config import DEFAULT_FIRST, GROUP_CONTEXT_CACHE_TTL_SECONDS, MATHNASIUM_GROUP_ID
 from .errors import AppointyApiError
+from .guardian_status import guardian_active_from_students
 from .queries import GRAPHQL_OTHER_ENTITY_QUERIES
 from .utils import (
     _build_booking_url_info,
@@ -450,7 +451,7 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
                         dict.fromkeys([value for value in center_custom_ids if value])
                     ),
                     "studentIds": [],
-                    "active": True,
+                    "active": None,
                     "createdAt": row.get("createdOn"),
                     "updatedAt": row.get("updatedOn"),
                     "timezone": row.get("userProfileTimezone") or row.get("timezone"),
@@ -487,7 +488,7 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "centerIds": [],
                     "centerCustomIds": [],
                     "studentIds": [],
-                    "active": True,
+                    "active": None,
                     "createdAt": row.get("createdOn"),
                     "updatedAt": row.get("updatedOn"),
                     "timezone": row.get("userProfileTimezone") or row.get("timezone"),
@@ -868,6 +869,7 @@ async def _find_guardians_internal(
             _to_text(guardian.get("guardianId"))
         )
         enrichment_students = []
+        guardian_active = None
         try:
             detail_payload = await appointy.get_guardian_students_detail_graphql(
                 company_id=company_prefix,
@@ -876,6 +878,22 @@ async def _find_guardians_internal(
                     derived_centers[0] if derived_centers else resolved_center_id
                 ),
             )
+            if not isinstance(detail_payload, dict):
+                raise AppointyApiError("Guardian student detail response was invalid")
+            if detail_payload.get("errors"):
+                raise AppointyApiError("Guardian student detail query failed", payload=detail_payload["errors"])
+            connection = (detail_payload.get("data") or {}).get("students")
+            edges = connection.get("edges") if isinstance(connection, dict) else None
+            raw_students = [e.get("node") if isinstance(e, dict) else None for e in edges] if isinstance(edges, list) else None
+            if raw_students is not None and any(
+                isinstance(row, dict) and not _is_in_mathnasium_group(_to_text(row.get("id")))
+                for row in raw_students
+            ):
+                warnings.append("Guardian status is unknown: linked student response contained an out-of-group record.")
+            else:
+                guardian_active = guardian_active_from_students(raw_students)
+            if guardian_active is None:
+                warnings.append("Guardian active status could not be established from complete enrollment data.")
             location_links = (
                 (
                     ((detail_payload or {}).get("data") or {}).get(
@@ -947,7 +965,9 @@ async def _find_guardians_internal(
                 "createdAt": guardian.get("createdAt"),
                 "updatedAt": guardian.get("updatedAt"),
                 "timezone": guardian.get("timezone"),
-                "active": bool(guardian.get("active", True)),
+                "active": guardian_active,
+                "activeStatus": "unknown" if guardian_active is None else "active" if guardian_active else "inactive",
+                "activeStatusSource": "admin_ui_enrollment_windows" if guardian_active is not None else "unavailable",
                 "confidence": round(confidence, 3),
                 "matchReason": reason,
             }

@@ -53,7 +53,7 @@ async def mathnasium_find_guardian(
     centerId: Annotated[Optional[str], Field(description="Optional location id to further narrow the parent scope. Usually this is the locationId returned by mathnasium_find_center.")] = None,
     limit: Annotated[int, Field(description="Maximum guardian matches to return, capped at 50.", ge=1, le=50)] = 10,
 ) -> Dict[str, Any]:
-    """Find guardian records within a provided parent scope (company or location id)."""
+    """Find scoped guardians with linked students and enrollment details. active mirrors the admin guardian badge, not student booking eligibility or account enablement: future-only enrollments are inactive. active=null and activeStatus=unknown mean enrollment evidence is unavailable; never treat that as confirmed active/inactive."""
     config_error = require_config()
     if config_error:
         return config_error

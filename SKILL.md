@@ -265,3 +265,11 @@ continue partial searches. `summaryOnly` summarizes the returned page, not the w
 time range. A timeout, `partial=true`, or remaining cursor is not proof of no request.
 Do not call blocked reports or claim email delivery, sync history or complete
 eligibility explanations are available.
+
+
+Guardian `active` mirrors the admin enrollment-window badge, not account-enabled
+state or scheduling eligibility. Future-only enrollments can yield `active=false`
+while a student can book in advance. Check `activeStatus`; `unknown`/`active=null`
+means the read was incomplete, not that the guardian is inactive. Do not diagnose
+login failure solely from this badge. The existing frontend mixed finite/open-ended
+window behavior is preserved; use returned enrollment evidence for booking analysis.

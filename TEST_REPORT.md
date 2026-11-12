@@ -111,3 +111,21 @@ all-reasons eligibility endpoint. Current Radius balance is not sync history;
 remaining-bookable buckets are not booked/attended counts; slots/capacity are not an
 exhaustive diagnosis or independently verified free-seat calculation. Group-context
 response-size optimization remains outside this change.
+
+## Guardian badge regression follow-up (2026-11-12)
+
+- Traced the published QA frontend release `3ffc4d0`: helper module 1975
+  computes `allStudentsInactive`; guardian detail module 4755 displays the badge.
+- Executed that original helper with its bundled Moment dependency and a fixed
+  clock. Checked in 21 sanitized input/output cases covering current, expired,
+  future, open-ended, mixed, boundary, invalid-date and multiple-student cases.
+- Guardian status now uses those enrollment-window rules, not a hard-coded true
+  or student booking eligibility. Missing/failed detail reads return unknown.
+- Rechecked Jacob Marlow in the QA admin UI: Inactive. The matching lookup
+  regression returns `active: false`; future-only booking eligibility remains
+  separate and is covered by regression tests.
+- Automated suite: 44 tests passed, including all 21 original-helper cases.
+- Live local HTTP MCP test attempted twice against QA only. Both stopped at
+  upstream AppQuery HTTP 403 before guardian lookup could run. Live API parity
+  therefore remains blocked, not passed. No QA records were modified.
+- No auth, environment, dependency, deployment or production changes.
