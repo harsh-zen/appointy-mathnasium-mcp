@@ -158,7 +158,7 @@ async def mathnasium_get_entity(
     entityId: Annotated[
         Optional[str],
         Field(
-            description="Exact entity ID for profile/audit reads, a seed apt_ ID for recurring_series, or exact Radius student ID for radius_student. Optional exact filter for legacy list reads; not fuzzy search."
+            description="Exact entity ID for profile/audit reads, a seed apt_ ID for recurring_series, or exact Radius student ID for radius_student. Optional exact filter for legacy list reads; not fuzzy search. Rejected for activity_logs: upstream has no target-entity filter."
         ),
     ] = None,
     companyId: Annotated[
@@ -245,8 +245,28 @@ async def mathnasium_get_entity(
     eventIds: Annotated[
         Optional[List[str]],
         Field(
-            description="Exact activity event IDs, e.g. ale_223/ale_224 for deleted availability evidence."
+            description="Activity event-type IDs, e.g. ale_223/ale_224 for deleted availability evidence; not IDs of the affected service or entity."
         ),
+    ] = None,
+    displayEventName: Annotated[
+        Optional[str],
+        Field(description="activity_logs only: upstream display-event-name filter; not a service/entity ID."),
+    ] = None,
+    userEmail: Annotated[
+        Optional[str],
+        Field(description="activity_logs only: filter by actor email, not the affected guardian's email."),
+    ] = None,
+    userId: Annotated[
+        Optional[str],
+        Field(description="activity_logs only: filter by actor user ID, not the affected entity ID."),
+    ] = None,
+    ipAddress: Annotated[
+        Optional[str], Field(description="activity_logs only: upstream actor IP-address filter."),
+    ] = None,
+    # FastMCP drops unknown keys; capture this legacy key solely to reject it.
+    type: Annotated[
+        Optional[str],
+        Field(description="Unsupported legacy argument. Always rejected; use entityType and activity eventIds/displayEventName instead."),
     ] = None,
 ) -> Dict[str, Any]:
     """Read exact scoped entities and verified support configuration. booking_rules: location/service policies; portal_settings: booking toggles; availability_rules/window: configured hours; bookable_slots/durations: student/enrollment/service date checks; enrollment_balance: remaining-bookable buckets (not usage history); recurring_series: seed appointment entityId; attendance_statuses: configured no-show etc; activity_logs: bounded audit evidence; guardian_profile/student_audit: timezone/timestamps; record_metadata: company/location AutoInvites; instructor_services: assignments; consumer_appointment_count: undated count; radius_student: current wrapper projection, not sync history. No writes or authoritative full-reason diagnosis."""
@@ -254,6 +274,16 @@ async def mathnasium_get_entity(
     if config_error:
         return config_error
     try:
+        if type is not None:
+            raise ValueError(
+                "type is not a supported filter. Use entityType; for activity_logs use eventIds or displayEventName."
+            )
+        if entityType != "activity_logs" and any(
+            value is not None for value in (displayEventName, userEmail, userId, ipAddress)
+        ):
+            raise ValueError(
+                "displayEventName, userEmail, userId and ipAddress apply only to activity_logs."
+            )
         if entityType == "appointments":
             return await find_appointments(
                 student_id=studentId,
@@ -286,6 +316,10 @@ async def mathnasium_get_entity(
                 cursor=cursor,
                 limit=limit,
                 event_ids=eventIds,
+                display_event_name=displayEventName,
+                user_email=userEmail,
+                user_id=userId,
+                ip_address=ipAddress,
             )
         if entityType in {
             "group_settings",

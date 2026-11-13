@@ -34,7 +34,7 @@ RECORD_METADATA = 'query SupportRead($c:ID,$l:ID){company(id:$c,viewMask:{paths:
 
 INSTRUCTOR_SERVICES = "query SupportRead($e:String,$l:String,$n:Int,$a:String){listServicesOfEmployee(employeeId:$e,locationId:$l,first:$n,after:$a){edges{node{id title}}pageInfo{hasNextPage endCursor}}}"
 
-ACTIVITY_LOGS = "query SupportRead($p:[String],$n:Int,$o:Int,$range:TimeslotInput,$events:[String]){activityLogs(parents:$p,limit:$n,offset:$o,filter:{dateRange:$range,activityLogEventId:$events}){totalCount edges{node{id createdOn userId activityLogData displayEventName activityId}}pageInfo{hasNextPage nextOffset}}}"
+ACTIVITY_LOGS = "query SupportRead($p:[String],$n:Int,$o:Int,$filter:ListActivityLogFilterInput){activityLogs(parents:$p,limit:$n,offset:$o,filter:$filter){totalCount edges{node{id createdOn userId activityLogData displayEventName activityId}}pageInfo{hasNextPage nextOffset}}}"
 
 APPOINTMENTS = "query SupportRead($p:String,$c:listAppointmentRequestConsumerId,$g:String,$slot:TimeslotInput,$after:String,$n:Int,$status:AppointmentStatusFilterInput,$order:OrderBy){appointments(parent:$p,consumerId:$c,customerId:$g,timeslot:$slot,first:$n,after:$after,status:$status,sortBy:StartTime,orderBy:$order){edges{cursor node{id status booked_by booked_on isBookedByAdmin updatedOn updatedBy recurringId recurrenceSet lastStatusUpdatedOn lastStatusUpdatedBy isLastStatusUpdatedByAdmin timeSlot{startTime endTime} service{_id title} employee{_id name} consumers{_id bookingCustomerId consumerType status timezone customStatus{customStatusId customStatusName} customStatusLastChangedOn cancelationReason} historicalData{createdOn createdBy isCreatedByAdmin status message consumerIds}}}pageInfo{hasNextPage endCursor}}}"
 

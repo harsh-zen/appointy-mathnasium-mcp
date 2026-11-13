@@ -100,10 +100,44 @@ async def read_entity(
     cursor=None,
     limit=25,
     event_ids=None,
+    display_event_name=None,
+    user_email=None,
+    user_id=None,
+    ip_address=None,
 ):
     """No natural-language dispatch, arbitrary GraphQL, or mutations."""
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100.")
+    activity_filters = {
+        "displayEventName": display_event_name,
+        "userEmail": user_email,
+        "userId": user_id,
+        "ipAddress": ip_address,
+    }
+    if entity_type == "activity_logs":
+        unsupported = {
+            "entityId": entity_id,
+            "serviceId": service_id,
+            "studentId": student_id,
+            "guardianId": guardian_id,
+            "enrollmentId": enrollment_id,
+            "instructorId": instructor_id,
+            "durationSeconds": duration,
+        }
+        supplied = [key for key, value in unsupported.items() if value is not None]
+        if supplied:
+            raise ValueError(
+                "activity_logs does not support filters: "
+                + ", ".join(supplied)
+                + ". Use parentId, dates, eventIds, displayEventName, userEmail, userId or ipAddress."
+            )
+    elif any(value is not None for value in activity_filters.values()):
+        raise ValueError(
+            "displayEventName, userEmail, userId and ipAddress apply only to activity_logs."
+        )
+    for key, value in activity_filters.items():
+        if value is not None and not value.strip():
+            raise ValueError(f"{key} must not be blank.")
     co = company_id(company) if company else None
     scope = await full_id(parent_id, company=co) if parent_id else None
     loc = await full_id(location, company=co) if location else None
@@ -138,6 +172,9 @@ async def read_entity(
         timezone=timezone,
         durationSeconds=duration,
         eventIds=event_ids or [],
+    )
+    filters.update(
+        {key: value for key, value in activity_filters.items() if value is not None}
     )
     token = decode_cursor(cursor, filters)
     variables = {}
@@ -289,8 +326,15 @@ async def read_entity(
             "p": [scope],
             "n": limit,
             "o": token or 0,
-            "range": slot,
-            "events": event_ids or None,
+            "filter": {
+                "dateRange": slot,
+                "activityLogEventId": event_ids or None,
+                **{
+                    key: value
+                    for key, value in activity_filters.items()
+                    if value is not None
+                },
+            },
         }, "activityLogs"
         warnings.append(
             "Audit events can have missing activity IDs or incomplete snapshots; do not reconstruct unknown deleted records."

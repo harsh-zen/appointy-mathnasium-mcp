@@ -273,3 +273,14 @@ while a student can book in advance. Check `activeStatus`; `unknown`/`active=nul
 means the read was incomplete, not that the guardian is inactive. Do not diagnose
 login failure solely from this badge. The existing frontend mixed finite/open-ended
 window behavior is preserved; use returned enrollment evidence for booking analysis.
+
+## Targeted Appointy activity history
+
+Use `get_entity` with `entityType=activity_logs`, `parentId`, a bounded date
+window and verified `eventIds` or `displayEventName`. Optional `userEmail`,
+`userId` and `ipAddress` filter the actor. They do not select an affected account.
+Continue `next_cursor` with identical filters. Prefer short date windows rather
+than scanning months; if stopping early, state the unsearched coverage.
+Do not pass `type`, `entityId` or `serviceId`: these are rejected, not supported
+activity target filters. Other entity/booking-specific filters are also rejected.
+Do not claim the old/new setting value unless present in audit evidence.
