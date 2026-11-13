@@ -2,9 +2,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import time
 
+from . import support_queries
 from .clients import appointy
 from .config import DEFAULT_FIRST, GROUP_CONTEXT_CACHE_TTL_SECONDS, MATHNASIUM_GROUP_ID
 from .errors import AppointyApiError
+from .guardian_status import guardian_active_from_students
 from .queries import GRAPHQL_OTHER_ENTITY_QUERIES
 from .utils import (
     _build_booking_url_info,
@@ -181,7 +183,10 @@ def _raw_mathnasium_group(raw: Dict[str, Any]) -> Dict[str, Any]:
 def _raw_company_by_id(group: Dict[str, Any], company_id: str) -> Dict[str, Any]:
     target = _to_text(company_id)
     for company in _listify(group.get("companies")):
-        if isinstance(company, dict) and _to_text(company.get("id")) == target:
+        if (
+            isinstance(company, dict)
+            and _to_text(company.get("id")).split("/")[-1] == target.split("/")[-1]
+        ):
             return company
     return {}
 
@@ -189,9 +194,16 @@ def _raw_company_by_id(group: Dict[str, Any], company_id: str) -> Dict[str, Any]
 def _raw_location_by_id(company: Dict[str, Any], location_id: str) -> Dict[str, Any]:
     target = _to_text(location_id)
     locations_connection = company.get("locations") if isinstance(company, dict) else {}
-    for edge in _listify((locations_connection or {}).get("edges") if isinstance(locations_connection, dict) else []):
+    for edge in _listify(
+        (locations_connection or {}).get("edges")
+        if isinstance(locations_connection, dict)
+        else []
+    ):
         node = edge.get("node") if isinstance(edge, dict) else {}
-        if isinstance(node, dict) and _to_text(node.get("id")) == target:
+        if (
+            isinstance(node, dict)
+            and _to_text(node.get("id")).split("/")[-1] == target.split("/")[-1]
+        ):
             return node
     return {}
 
@@ -390,8 +402,12 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
     if isinstance(payload, dict):
         if isinstance(payload.get("edges"), list):
             edges = payload.get("edges", [])
-        elif isinstance(((payload.get("data") or {}).get("customers") or {}).get("edges"), list):
-            edges = ((payload.get("data") or {}).get("customers") or {}).get("edges", [])
+        elif isinstance(
+            ((payload.get("data") or {}).get("customers") or {}).get("edges"), list
+        ):
+            edges = ((payload.get("data") or {}).get("customers") or {}).get(
+                "edges", []
+            )
 
     if isinstance(edges, list):
         for edge in edges:
@@ -406,7 +422,9 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
             email = _normalize_email(_to_text(row.get("email")))
             name = _extract_name(row)
             guardian_id = _extract_id(row, "id", "customerId", "guardianId")
-            phone = _normalize_phone(_to_text(_coalesce(row.get("phoneNumber"), row.get("phone"))))
+            phone = _normalize_phone(
+                _to_text(_coalesce(row.get("phoneNumber"), row.get("phone")))
+            )
             metadata = _parse_metadata(row.get("metadata"))
             center_ids = _extract_ids_from_object(
                 _coalesce(
@@ -426,10 +444,17 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "name": name,
                     "email": email,
                     "phone": phone,
-                    "centerIds": list(dict.fromkeys([value for value in center_ids if value])),
-                    "centerCustomIds": list(dict.fromkeys([value for value in center_custom_ids if value])),
+                    "centerIds": list(
+                        dict.fromkeys([value for value in center_ids if value])
+                    ),
+                    "centerCustomIds": list(
+                        dict.fromkeys([value for value in center_custom_ids if value])
+                    ),
                     "studentIds": [],
-                    "active": True,
+                    "active": None,
+                    "createdAt": row.get("createdOn"),
+                    "updatedAt": row.get("updatedOn"),
+                    "timezone": row.get("userProfileTimezone") or row.get("timezone"),
                     "_raw": row,
                 }
             )
@@ -449,7 +474,11 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
             guardian_id = _extract_id(row, "guardianId", "parentId", "customerId", "id")
             if not email and not name and not guardian_id:
                 continue
-            phone = _normalize_phone(_to_text(_coalesce(row.get("phone"), row.get("telephone"), row.get("mobile"))))
+            phone = _normalize_phone(
+                _to_text(
+                    _coalesce(row.get("phone"), row.get("telephone"), row.get("mobile"))
+                )
+            )
             candidates.append(
                 {
                     "guardianId": guardian_id or f"guardian:{email or name}",
@@ -459,7 +488,10 @@ def _parse_guardian_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "centerIds": [],
                     "centerCustomIds": [],
                     "studentIds": [],
-                    "active": True,
+                    "active": None,
+                    "createdAt": row.get("createdOn"),
+                    "updatedAt": row.get("updatedOn"),
+                    "timezone": row.get("userProfileTimezone") or row.get("timezone"),
                     "_raw": row,
                 }
             )
@@ -471,7 +503,9 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
     edges = []
     direct_student = None
     if isinstance(payload, dict):
-        if isinstance(((payload.get("data") or {}).get("students") or {}).get("edges"), list):
+        if isinstance(
+            ((payload.get("data") or {}).get("students") or {}).get("edges"), list
+        ):
             edges = ((payload.get("data") or {}).get("students") or {}).get("edges", [])
         elif isinstance((payload.get("students") or {}).get("edges"), list):
             edges = (payload.get("students") or {}).get("edges", [])
@@ -487,7 +521,11 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
 
     if isinstance(edges, list):
         for item in edges:
-            row = item.get("node") if isinstance(item, dict) and isinstance(item.get("node"), dict) else {}
+            row = (
+                item.get("node")
+                if isinstance(item, dict) and isinstance(item.get("node"), dict)
+                else {}
+            )
             if not row and isinstance(item, dict):
                 row = item
             if not row:
@@ -499,7 +537,11 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                 _to_text(metadata.get("physicalCenterCustomId")),
                 _to_text(metadata.get("virtualCenterCustomId")),
             ]
-            location_link = row.get("studentLocationsLink") if isinstance(row.get("studentLocationsLink"), dict) else {}
+            location_link = (
+                row.get("studentLocationsLink")
+                if isinstance(row.get("studentLocationsLink"), dict)
+                else {}
+            )
             location_ids = _listify(location_link.get("locationIds"))
             enrolments, enrolment_status = _normalize_enrolments(row.get("enrolments"))
             can_schedule_sessions = enrolment_status == "active"
@@ -507,15 +549,26 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                 {
                     "studentId": student_id or f"student:{name}",
                     "name": name,
-                    "guardianIds": [_to_text(row.get("primaryGuardianId"))] if _to_text(row.get("primaryGuardianId")) else [],
-                    "centerIds": [cid for cid in location_ids if isinstance(cid, str) and cid],
-                    "centerCustomIds": list(dict.fromkeys([value for value in center_custom_ids if value])),
+                    "guardianIds": (
+                        [_to_text(row.get("primaryGuardianId"))]
+                        if _to_text(row.get("primaryGuardianId"))
+                        else []
+                    ),
+                    "centerIds": [
+                        cid for cid in location_ids if isinstance(cid, str) and cid
+                    ],
+                    "centerCustomIds": list(
+                        dict.fromkeys([value for value in center_custom_ids if value])
+                    ),
                     "enrollmentStatus": enrolment_status,
                     "enrollments": enrolments,
                     "grade": _to_text(row.get("grade")),
                     "customStudentId": _to_text(row.get("customStudentId")),
                     "activeMembership": can_schedule_sessions,
                     "canScheduleSessions": can_schedule_sessions,
+                    "createdAt": row.get("createdOn"),
+                    "updatedAt": row.get("updatedOn"),
+                    "timezone": row.get("userProfileTimezone") or row.get("timezone"),
                     "_raw": row,
                 }
             )
@@ -523,7 +576,9 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
         for row in _iter_dict_nodes(payload):
             student_id = _extract_id(row, "studentId", "id")
             name = _extract_name(row)
-            has_student_shape = any(key in row for key in ["studentId", "firstName", "lastName"])
+            has_student_shape = any(
+                key in row for key in ["studentId", "firstName", "lastName"]
+            )
             if not has_student_shape and not (student_id and name):
                 continue
             candidates.append(
@@ -537,6 +592,9 @@ def _parse_student_candidates(payload: Any) -> List[Dict[str, Any]]:
                     "enrollments": [],
                     "activeMembership": False,
                     "canScheduleSessions": False,
+                    "createdAt": row.get("createdOn"),
+                    "updatedAt": row.get("updatedOn"),
+                    "timezone": row.get("userProfileTimezone") or row.get("timezone"),
                     "_raw": row,
                 }
             )
@@ -718,9 +776,17 @@ async def _find_guardians_internal(
     limit: int,
 ) -> Dict[str, Any]:
     if not parent_id:
-        return {"matches": [], "warnings": ["parentId is required (company or location id)."]}
+        return {
+            "matches": [],
+            "warnings": ["parentId is required (company or location id)."],
+        }
     if not any([email, name, first_name, last_name, phone]):
-        return {"matches": [], "warnings": ["At least one of email, name, firstName, lastName, or phone is required."]}
+        return {
+            "matches": [],
+            "warnings": [
+                "At least one of email, name, firstName, lastName, or phone is required."
+            ],
+        }
 
     context = await _get_group_context_cached(refresh=False)
     warnings = []
@@ -728,14 +794,26 @@ async def _find_guardians_internal(
     normalized_name = _normalize_space(name or "")
     explicit_name = _normalize_space(f"{first_name or ''} {last_name or ''}")
     local_name_query = normalized_name or explicit_name
-    lookup_name = _normalize_space(first_name or "") or (normalized_name.split(" ")[0] if normalized_name else None)
-    resolved_parent_id, company_scope = _resolve_guardian_parent_scope(parent_id, context)
+    lookup_name = _normalize_space(first_name or "") or (
+        normalized_name.split(" ")[0] if normalized_name else None
+    )
+    resolved_parent_id, company_scope = _resolve_guardian_parent_scope(
+        parent_id, context
+    )
     if not resolved_parent_id:
-        return {"matches": [], "warnings": ["parentId could not be resolved to a company/location scope."]}
+        return {
+            "matches": [],
+            "warnings": ["parentId could not be resolved to a company/location scope."],
+        }
     if not company_scope:
-        return {"matches": [], "warnings": ["Could not resolve company scope from parentId."]}
+        return {
+            "matches": [],
+            "warnings": ["Could not resolve company scope from parentId."],
+        }
 
-    resolved_center_id = _resolve_full_location_id(center_id, context) if center_id else None
+    resolved_center_id = (
+        _resolve_full_location_id(center_id, context) if center_id else None
+    )
     location_ids = [resolved_center_id] if resolved_center_id else None
 
     try:
@@ -774,46 +852,100 @@ async def _find_guardians_internal(
 
         derived_centers = list(guardian.get("centerIds", []))
         derived_centers.extend(
-            _map_center_custom_ids_to_location_ids(_listify(guardian.get("centerCustomIds")), context)
+            _map_center_custom_ids_to_location_ids(
+                _listify(guardian.get("centerCustomIds")), context
+            )
         )
-        derived_centers = list(dict.fromkeys([center for center in derived_centers if center]))
+        derived_centers = list(
+            dict.fromkeys([center for center in derived_centers if center])
+        )
         if resolved_center_id and resolved_center_id not in derived_centers:
             continue
 
-        confidence, reason = _guardian_confidence(guardian, email=email, name=local_name_query, phone=phone)
-        company_prefix = _company_prefix_from_entity_id(_to_text(guardian.get("guardianId")))
+        confidence, reason = _guardian_confidence(
+            guardian, email=email, name=local_name_query, phone=phone
+        )
+        company_prefix = _company_prefix_from_entity_id(
+            _to_text(guardian.get("guardianId"))
+        )
         enrichment_students = []
+        guardian_active = None
         try:
             detail_payload = await appointy.get_guardian_students_detail_graphql(
                 company_id=company_prefix,
                 guardian_id=_to_text(guardian.get("guardianId")),
-                location_id=(derived_centers[0] if derived_centers else resolved_center_id),
+                location_id=(
+                    derived_centers[0] if derived_centers else resolved_center_id
+                ),
             )
+            if not isinstance(detail_payload, dict):
+                raise AppointyApiError("Guardian student detail response was invalid")
+            if detail_payload.get("errors"):
+                raise AppointyApiError("Guardian student detail query failed", payload=detail_payload["errors"])
+            connection = (detail_payload.get("data") or {}).get("students")
+            edges = connection.get("edges") if isinstance(connection, dict) else None
+            raw_students = [e.get("node") if isinstance(e, dict) else None for e in edges] if isinstance(edges, list) else None
+            if raw_students is not None and any(
+                isinstance(row, dict) and not _is_in_mathnasium_group(_to_text(row.get("id")))
+                for row in raw_students
+            ):
+                warnings.append("Guardian status is unknown: linked student response contained an out-of-group record.")
+            else:
+                guardian_active = guardian_active_from_students(raw_students)
+            if guardian_active is None:
+                warnings.append("Guardian active status could not be established from complete enrollment data.")
             location_links = (
-                (((detail_payload or {}).get("data") or {}).get("customerLocationLinks") or {})
+                (
+                    ((detail_payload or {}).get("data") or {}).get(
+                        "customerLocationLinks"
+                    )
+                    or {}
+                )
                 if isinstance(detail_payload, dict)
                 else {}
             )
-            derived_centers.extend([loc for loc in _listify(location_links.get("locationIds")) if isinstance(loc, str)])
-            derived_centers = list(dict.fromkeys([center for center in derived_centers if center]))
+            derived_centers.extend(
+                [
+                    loc
+                    for loc in _listify(location_links.get("locationIds"))
+                    if isinstance(loc, str)
+                ]
+            )
+            derived_centers = list(
+                dict.fromkeys([center for center in derived_centers if center])
+            )
             detail_students = _parse_student_candidates(detail_payload)
             for detail_student in detail_students:
-                if not _is_in_mathnasium_group(_to_text(detail_student.get("studentId"))):
+                if not _is_in_mathnasium_group(
+                    _to_text(detail_student.get("studentId"))
+                ):
                     continue
                 enrichment_students.append(
                     {
                         "studentId": _to_text(detail_student.get("studentId")),
                         "name": _to_text(detail_student.get("name")),
-                        "customStudentId": _to_text(detail_student.get("customStudentId")),
-                        "enrollmentStatus": _to_text(detail_student.get("enrollmentStatus")),
-                        "activeMembership": bool(detail_student.get("activeMembership", False)),
-                        "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
+                        "customStudentId": _to_text(
+                            detail_student.get("customStudentId")
+                        ),
+                        "createdAt": detail_student.get("createdAt"),
+                        "updatedAt": detail_student.get("updatedAt"),
+                        "enrollmentStatus": _to_text(
+                            detail_student.get("enrollmentStatus")
+                        ),
+                        "activeMembership": bool(
+                            detail_student.get("activeMembership", False)
+                        ),
+                        "canScheduleSessions": bool(
+                            detail_student.get("canScheduleSessions", False)
+                        ),
                         "enrollments": _listify(detail_student.get("enrollments")),
                     }
                 )
             enrichment_students = _unique_by_key(enrichment_students, ["studentId"])
         except AppointyApiError as exc:
-            warnings.append(f"Guardian detail enrichment failed for {_to_text(guardian.get('guardianId'))}: {exc}")
+            warnings.append(
+                f"Guardian detail enrichment failed for {_to_text(guardian.get('guardianId'))}: {exc}"
+            )
 
         center_details = _build_center_details_from_ids(derived_centers, context)
         results.append(
@@ -824,9 +956,18 @@ async def _find_guardians_internal(
                 "phone": guardian_phone,
                 "centerIds": derived_centers,
                 "centers": center_details,
-                "studentIds": [s.get("studentId", "") for s in enrichment_students if isinstance(s, dict)],
+                "studentIds": [
+                    s.get("studentId", "")
+                    for s in enrichment_students
+                    if isinstance(s, dict)
+                ],
                 "students": enrichment_students,
-                "active": bool(guardian.get("active", True)),
+                "createdAt": guardian.get("createdAt"),
+                "updatedAt": guardian.get("updatedAt"),
+                "timezone": guardian.get("timezone"),
+                "active": guardian_active,
+                "activeStatus": "unknown" if guardian_active is None else "active" if guardian_active else "inactive",
+                "activeStatusSource": "admin_ui_enrollment_windows" if guardian_active is not None else "unavailable",
                 "confidence": round(confidence, 3),
                 "matchReason": reason,
             }
@@ -836,9 +977,13 @@ async def _find_guardians_internal(
     results = results[: max(1, min(limit, 50))]
 
     if email and len(input_email_variants) > 1:
-        warnings.append("Checked normalized email variants (including dotted/plus variants).")
+        warnings.append(
+            "Checked normalized email variants (including dotted/plus variants)."
+        )
     if len(results) > 1:
-        warnings.append("Multiple guardian matches found; verify center and student linkage before replying.")
+        warnings.append(
+            "Multiple guardian matches found; verify center and student linkage before replying."
+        )
     if not results and not warnings:
         warnings.append("No guardian match found in provided parent scope.")
 
@@ -854,12 +999,19 @@ async def _find_students_internal(
     limit: int,
 ) -> Dict[str, Any]:
     if not any([student_name, guardian_email, guardian_id]):
-        return {"matches": [], "warnings": ["At least one of studentName, guardianEmail, or guardianId is required."]}
+        return {
+            "matches": [],
+            "warnings": [
+                "At least one of studentName, guardianEmail, or guardianId is required."
+            ],
+        }
 
     context = await _get_group_context_cached(refresh=False)
     warnings = []
     if guardian_email and not guardian_id:
-        warnings.append("guardianEmail filter is ignored without guardianId in group-level student search.")
+        warnings.append(
+            "guardianEmail filter is ignored without guardianId in group-level student search."
+        )
 
     results: List[Dict[str, Any]] = []
     center_hint = center_id
@@ -877,21 +1029,31 @@ async def _find_students_internal(
             location_id=None,
         )
     except AppointyApiError as exc:
-        return {"matches": [], "warnings": [f"Student query failed for group scope: {exc}"]}
+        return {
+            "matches": [],
+            "warnings": [f"Student query failed for group scope: {exc}"],
+        }
 
     parsed = _parse_student_candidates(payload)
     for student in parsed:
         student_id = _to_text(student.get("studentId"))
         if not _is_in_mathnasium_group(student_id):
             continue
-        if student_name and _score_text_match(student_name, _to_text(student.get("name"))) <= 0:
+        if (
+            student_name
+            and _score_text_match(student_name, _to_text(student.get("name"))) <= 0
+        ):
             continue
 
         derived_center_ids = list(_listify(student.get("centerIds")))
         derived_center_ids.extend(
-            _map_center_custom_ids_to_location_ids(_listify(student.get("centerCustomIds")), context)
+            _map_center_custom_ids_to_location_ids(
+                _listify(student.get("centerCustomIds")), context
+            )
         )
-        derived_center_ids = list(dict.fromkeys([value for value in derived_center_ids if value]))
+        derived_center_ids = list(
+            dict.fromkeys([value for value in derived_center_ids if value])
+        )
         if center_hint and center_hint not in derived_center_ids:
             continue
 
@@ -901,18 +1063,18 @@ async def _find_students_internal(
 
         company_scope = _company_prefix_from_entity_id(student_id)
         detail_student = student
-        try:
-            detail_payload = await appointy.get_student_detail_graphql(
-                company_id=company_scope,
-                student_id=student_id,
-                location_id=(center_hint if center_hint else None),
-            )
-            parsed_detail = _parse_student_candidates(detail_payload)
-            if parsed_detail:
-                detail_student = parsed_detail[0]
-        except AppointyApiError as exc:
-            warnings.append(f"Student detail enrichment failed for {student_id}: {exc}")
-
+        if not payload.get("_detailsHydrated"):
+            try:
+                detail_payload = await appointy.get_student_detail_graphql(
+                    company_id=company_scope,
+                    student_id=student_id,
+                    location_id=(center_hint if center_hint else None),
+                )
+                parsed_detail = _parse_student_candidates(detail_payload)
+                if parsed_detail:
+                    detail_student = parsed_detail[0]
+            except AppointyApiError as exc:
+                warnings.append(f"Student detail enrichment failed for {student_id}: {exc}")
         confidence, reason = _student_confidence(
             {
                 **detail_student,
@@ -932,8 +1094,12 @@ async def _find_students_internal(
                 "enrollmentStatus": detail_student.get("enrollmentStatus", "unknown"),
                 "enrollments": _listify(detail_student.get("enrollments")),
                 "customStudentId": _to_text(detail_student.get("customStudentId")),
+                "createdAt": detail_student.get("createdAt"),
+                "updatedAt": detail_student.get("updatedAt"),
                 "activeMembership": bool(detail_student.get("activeMembership", False)),
-                "canScheduleSessions": bool(detail_student.get("canScheduleSessions", False)),
+                "canScheduleSessions": bool(
+                    detail_student.get("canScheduleSessions", False)
+                ),
                 "confidence": round(confidence, 3),
                 "matchReason": reason,
             }
@@ -946,7 +1112,9 @@ async def _find_students_internal(
     results = results[: max(1, min(limit, 50))]
 
     if len(results) > 1:
-        warnings.append("Multiple student candidates found; verify guardian and center before action.")
+        warnings.append(
+            "Multiple student candidates found; verify guardian and center before action."
+        )
     if not results and not warnings:
         warnings.append("No student match found in Mathnasium group scope.")
 
@@ -1028,27 +1196,54 @@ async def _get_context_entity_internal(
     if not company_id:
         return {"status": "failed", "error": f"{entity_type} requires companyId."}
 
-    company = _raw_company_by_id(group, company_id)
+    from .scopes import company_id as resolve_company, full_id
+
+    resolved_company = resolve_company(company_id)
+    company = _raw_company_by_id(group, resolved_company)
     if not company:
-        return {"status": "failed", "error": f"Company not found for companyId={company_id}."}
+        from .support_reads import graphql
+
+        data = await graphql(
+            support_queries.COMPANY_CONTEXT,
+            {"id": resolved_company},
+            company=resolved_company,
+        )
+        company = data.get("company") or {}
+        if not company:
+            return {
+                "status": "failed",
+                "code": "COMPANY_NOT_FOUND",
+                "error": "Company lookup returned no record.",
+            }
 
     if entity_type == "company_settings":
-        company_settings = company.get("companySettings") if isinstance(company.get("companySettings"), dict) else {}
+        company_settings = (
+            company.get("companySettings")
+            if isinstance(company.get("companySettings"), dict)
+            else {}
+        )
         return {
             "status": "success",
             "entityType": entity_type,
             "source": "graphql:AppQuery",
             "data": {
                 "companyId": _to_text(company.get("id")),
-                "displayName": _to_text(_coalesce(company.get("displayName"), company.get("title"))),
+                "displayName": _to_text(
+                    _coalesce(company.get("displayName"), company.get("title"))
+                ),
                 "customCompanyId": _to_text(company.get("customCompanyId")),
                 "active": bool(_coalesce(company.get("active"), True)),
                 "preference": company.get("preference") or {},
                 "companySettings": company_settings,
-                "aliases": _decode_base64_json(company_settings.get("aliases")) if isinstance(company_settings.get("aliases"), str) else {},
+                "aliases": (
+                    _decode_base64_json(company_settings.get("aliases"))
+                    if isinstance(company_settings.get("aliases"), str)
+                    else {}
+                ),
                 "roleLevelCustomization": company.get("roleLevelCustomization"),
                 "apps": _listify(company.get("apps")),
                 "metadata": company.get("metadata"),
+                "decodedMetadata": _parse_metadata(company.get("metadata")),
             },
         }
 
@@ -1065,10 +1260,30 @@ async def _get_context_entity_internal(
 
     if entity_type == "location_settings":
         if not location_id:
-            return {"status": "failed", "error": "location_settings requires locationId."}
-        location = _raw_location_by_id(company, location_id)
+            return {
+                "status": "failed",
+                "error": "location_settings requires locationId.",
+            }
+        resolved_location = await full_id(location_id, company=resolved_company)
+        if not resolved_location.startswith(resolved_company + "/"):
+            raise ValueError("locationId is not within companyId.")
+        location = _raw_location_by_id(company, resolved_location)
         if not location:
-            return {"status": "failed", "error": f"Location not found for locationId={location_id}."}
+            from .support_reads import graphql
+
+            data = await graphql(
+                support_queries.LOCATION_CONTEXT,
+                {"id": resolved_location},
+                company=resolved_company,
+                location=resolved_location,
+            )
+            location = data.get("location") or {}
+            if not location:
+                return {
+                    "status": "failed",
+                    "code": "LOCATION_NOT_FOUND",
+                    "error": "Location lookup returned no record.",
+                }
         return {
             "status": "success",
             "entityType": entity_type,
@@ -1084,10 +1299,14 @@ async def _get_context_entity_internal(
                 "address": location.get("address") or {},
                 "telephones": _listify(location.get("telephones")),
                 "metadata": location.get("metadata"),
+                "decodedMetadata": _parse_metadata(location.get("metadata")),
             },
         }
 
-    return {"status": "failed", "error": f"Unsupported context entity type: {entity_type}"}
+    return {
+        "status": "failed",
+        "error": f"Unsupported context entity type: {entity_type}",
+    }
 
 
 async def _get_graphql_entity_internal(
@@ -1098,20 +1317,51 @@ async def _get_graphql_entity_internal(
     location_id: Optional[str],
     entity_id: Optional[str],
     limit: int,
+    cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
     query_spec = GRAPHQL_OTHER_ENTITY_QUERIES.get(entity_type)
     if not query_spec:
-        return {"status": "failed", "error": f"Unsupported GraphQL entity type: {entity_type}"}
+        return {
+            "status": "failed",
+            "error": f"Unsupported GraphQL entity type: {entity_type}",
+        }
     if not parent_id:
         return {"status": "failed", "error": f"{entity_type} requires parentId."}
 
+    from .scopes import full_id
+    from .support_reads import decode_cursor, encode_cursor
+
+    from .scopes import company_id as resolve_company
+    parent_id = await full_id(parent_id, company=company_id)
+    resolved_company = resolve_company(parent_id)
+    if company_id and resolve_company(company_id) != resolved_company:
+        raise ValueError("parentId conflicts with companyId.")
+    if entity_type == "employees" and "/loc_" in parent_id:
+        raise ValueError("employees requires a company parentId.")
+    if entity_type in {"services", "resources"} and "/loc_" not in parent_id:
+        raise ValueError(f"{entity_type} requires a location parentId.")
+    if location_id:
+        location_id = await full_id(location_id, company=resolved_company)
+        if not location_id.startswith(resolved_company + "/"):
+            raise ValueError("locationId conflicts with parentId.")
     query_id, connection_name, query = query_spec
+    filters = {"entityType": entity_type, "parentId": parent_id, "entityId": entity_id}
+    after = decode_cursor(cursor, filters)
+    paginated = entity_type in {"employees", "services"}
     payload = await appointy._graphql(
         query_id=query_id,
         query=query,
-        variables={"parent": parent_id, "first": max(1, min(limit, 100))},
-        company_id=company_id or _company_prefix_from_entity_id(parent_id),
-        location_id=location_id if location_id else (parent_id if "/loc_" in parent_id else None),
+        variables={
+            "parent": parent_id,
+            "first": max(1, min(limit, 100)),
+            **({"after": after} if paginated else {}),
+        },
+        company_id=resolved_company,
+        location_id=(
+            location_id
+            if location_id
+            else (parent_id if "/loc_" in parent_id else None)
+        ),
     )
     errors = payload.get("errors") if isinstance(payload, dict) else None
     data = payload.get("data") if isinstance(payload, dict) else {}
@@ -1122,10 +1372,19 @@ async def _get_graphql_entity_internal(
         node = edge.get("node") if isinstance(edge, dict) else {}
         if not isinstance(node, dict):
             continue
-        if entity_id and _to_text(node.get("id")) != _to_text(entity_id):
+        if (
+            entity_id
+            and _to_text(node.get("id")).split("/")[-1]
+            != _to_text(entity_id).split("/")[-1]
+        ):
             continue
-        items.append(_normalize_service_entity(node) if entity_type == "services" else node)
+        items.append(
+            _normalize_service_entity(node) if entity_type == "services" else node
+        )
 
+    page_info = connection.get("pageInfo") or {}
+    if page_info.get("hasNextPage") and not page_info.get("endCursor"):
+        raise AppointyApiError("Upstream omitted the entity continuation token.")
     return {
         "status": "success" if not errors else "partial",
         "entityType": entity_type,
@@ -1133,6 +1392,12 @@ async def _get_graphql_entity_internal(
         "parentId": parent_id,
         "entityId": entity_id or "",
         "items": items,
+        "has_more": bool((connection.get("pageInfo") or {}).get("hasNextPage")),
+        "next_cursor": (
+            encode_cursor((connection.get("pageInfo") or {}).get("endCursor"), filters)
+            if (connection.get("pageInfo") or {}).get("hasNextPage")
+            else None
+        ),
         "rawErrors": errors,
         "warnings": [
             "This common lookup does exact entity-type/parent/id based reads only; it does not fuzzy-search names or infer missing scope."

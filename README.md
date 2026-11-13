@@ -15,6 +15,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_find_guardian`
 - `mathnasium_find_student`
 - `mathnasium_get_entity`
+- `mathnasium_find_appointments`
 - `mathnasium_search_custom_logs`
 
 ## Data Source Notes:
@@ -22,7 +23,7 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_get_group_context` uses GraphQL `AppQuery`.
 - `mathnasium_find_center` uses cached GraphQL context index.
 - `mathnasium_find_guardian` is GraphQL-first (`customers`) with guardian-student enrichment from `CustomerDetailQuery`.
-- `mathnasium_find_student` is GraphQL-first (`students`) with single-student enrichment from `student(id: ...)`.
+- `mathnasium_find_student` uses verified group-scoped `mathnasiumSearchEntity(type: Student)` and hydrates validated IDs; guardian-scoped reads retain `students(guardianId: ...)`.
 - `mathnasium_get_entity` is a common read-only entity lookup for objects not covered by the first-class center/guardian/student tools.
 - Guardian and student responses include enrollment-rich fields where available (`enrollments`, membership/session details, delivery methods, holds).
 - `mathnasium_search_custom_logs` searches the same production GKE logs using custom text, queryId, path, message, and endpoint filters without exposing raw Cloud Logging syntax.
@@ -54,7 +55,7 @@ Optional:
 - `GCP_LOG_MAX_LIMIT` (default `200`)
 - `GCP_LOG_CHUNK_HOURS` (default `48`)
 - `GCP_LOG_QUERY_TIMEOUT_SECONDS` (default `20` per chunk)
-- `GCP_LOG_TOTAL_TIMEOUT_SECONDS` (default `45` per MCP call)
+- `GCP_LOG_TOTAL_TIMEOUT_SECONDS` (default `45`; effective application cap is `25` seconds)
 - `GCP_LOG_MAX_ATTEMPTS` (default `2` per chunk)
 - `GCP_LOG_RETRY_BACKOFF_SECONDS` (default `1`)
 
@@ -137,3 +138,104 @@ docker run --rm -p 8080:8080 \
   -e GCP_PROJECT_ID \
   appointy-mathnasium-mcp
 ```
+## Verified Support Reads (API key)
+
+The support additions use existing GraphQL reads, not new Appointy backend endpoints.
+`mathnasium_get_entity` accepts these additional exact `entityType` values:
+
+| Type | Required arguments | Meaning / limits |
+| --- | --- | --- |
+| `booking_rules` | location `parentId` | Location rules; optional `serviceId` reads the service override. Interpret `policyType` before interval values. |
+| `portal_settings` | location `parentId` | Guardian portal/booking and recurring-booking toggles. |
+| `availability_rules` | location `parentId` | Configured current/expired blocks, recurrence, services, resources and capacity; native cursor. |
+| `availability_window` | location `parentId`, `startFrom`, `startTo` | Rules intersecting a window up to 31 days; bounded local continuation. |
+| `bookable_slots` | location `parentId`, `studentId`, `enrollmentId`, `serviceId`, `durationSeconds`, dates | Existing slot and eligible-service results; at most 7 days. Empty slots are not a complete diagnosis. |
+| `bookable_durations` | location `parentId`, `studentId`, `serviceId`, dates | Durations in seconds; at most 7 days. |
+| `enrollment_balance` | `studentId`, `guardianId` | Monthly remaining-bookable buckets; set the actual `timezone`. Not attendance counts or Radius history. |
+| `recurring_series` | seed appointment `entityId` | Series occurrences and recurrence rule. Direct `rec_` ID lookup is not available with the key. |
+| `attendance_statuses` | location `parentId` | Custom attendance names/IDs such as No-show, separate from overall appointment status. |
+| `activity_logs` | `parentId`, dates | Audit evidence up to 90 days; optional exact `eventIds`; offset wrapped in a filter-bound cursor. Deleted snapshots can be incomplete. |
+| `guardian_profile` | guardian `entityId` | Stored profile timezone and available audit dates. |
+| `student_audit` | student `entityId` | Explicit audit field-mask read. |
+| `record_metadata` | `companyId`, optional `locationId` | Raw and decoded metadata, including separately stored AutoInvites; unknown timestamps remain null. |
+| `instructor_services` | location `parentId`, `instructorId` | Assigned services with native pagination. |
+| `consumer_appointment_count` | location `parentId`, `studentId` or `guardianId` | Undated upstream counter, not a monthly usage report. |
+| `radius_student` | Radius student ID in `entityId` | Current wrapper projection, not last received payload/history. |
+
+Use full IDs returned by lookup. Short company IDs are supported; short location IDs
+need a company or a unique center-context match. Never substitute IDs from another group.
+For list reads, follow `next_cursor` with identical filters until `has_more=false`.
+The local continuation used for slots/window reads re-fetches the bounded window; it
+is not a snapshot and results can move if availability changes.
+
+`employees` now includes roles with their applicable scope, module names, location
+assignments and profile timezone. `employees` and `services` paginate with native cursors.
+Settings lookups accept short/full company/location IDs and fall back to a direct read
+when an otherwise valid record is absent from cached group context.
+
+### Filtered appointments
+
+Use `mathnasium_find_appointments` (or `get_entity` type `appointments` with
+`studentId`/`guardianId`, `startFrom`/`startTo`, `parentId` and `cursor`).
+Student, booking-customer, date and overall status filters execute upstream.
+The dedicated tool also accepts `custom_status_ids` from `attendance_statuses`.
+Default order is newest first; `order=asc` is supported. At most 50 rows per page,
+with a native filter-bound continuation. A location alone is rejected; provide an
+identity or a positive date window no longer than 62 days. When dates are omitted
+with an identity, the default is 31 days before through 31 days after now.
+An overall `APPOINTMENT_*` status is not an attendance label. Creator IDs do not
+by themselves identify a Radius sync. History is evidence, not a fabricated actor/source.
+
+### Log search continuation
+
+`mathnasium_search_custom_logs` reads one native GCP page (up to 50 rows) before
+returning, and scans empty newest-first chunks within a hard application budget of
+at most 25 seconds. The GCP RPC has an explicit timeout and automatic SDK retries
+are disabled; application retry attempts remain bounded by that deadline.
+Use `cursor` with the identical arguments for `next_cursor`. A timed-out chunk
+returns `partial=true`, a reason and a retryable continuation, not an empty success.
+`summaryOnly=true` omits rows and returns **page-level** counts/latest error, not a
+full-window aggregate. A partial/limited search never proves that no request exists.
+Infrastructure/proxy 503s outside the application cannot be guaranteed absent.
+Name/identifier search retains existing text-match semantics; exact structured-field
+indexing is not claimed by these changes.
+
+### Excluded backend gaps
+
+No utilization/overbooking/notification report access, direct recurring-ID reads,
+provider delivery/suppression, sync/balance history, complete deleted-availability
+snapshots or authoritative all-reasons eligibility endpoint is added. Null audit
+fields remain unknown. There are no writes, new authentication settings or deployment changes.
+
+
+### Guardian active-status semantics
+
+`mathnasium_find_guardian.active` now mirrors the QA admin **guardian detail badge**,
+not a hard-coded true value, account-enabled state, or student booking eligibility.
+`activeStatus` is `active`, `inactive` or `unknown`; `activeStatusSource` is
+`admin_ui_enrollment_windows` when calculated, otherwise `unavailable`.
+A failed, partial or incomplete detail read returns `active: null` with warnings.
+
+The traced frontend source is QA release `3ffc4d0`,
+`98.2ff17b35.chunk.js`, helper module 1975 and guardian detail module 4755.
+The view maps `students.edges` to nodes, invokes the helper with the configured
+UI timezone and shows Inactive when `allStudentsInactive` is true after loading.
+The helper compares instants without day rounding; timezone-aware API timestamps
+are compared as UTC instants here.
+
+- No students, or students with no enrollments: inactive.
+- Finite enrollment windows: a student is inactive if every window is wholly
+  past or wholly future. A current window makes that student active.
+- The exact year-1/Unix-epoch sentinel end dates are open-ended; an open-ended
+  enrollment is inactive before its start, active once started.
+- The frontend's mixed finite/open-ended branch uses **OR** between “all finite
+  windows outside now” and “all open-ended starts future”. This counterintuitive
+  behavior is preserved for UI parity, not silently corrected in the MCP.
+- Guardian active means at least one linked student is active under this rule.
+- Holds, remaining balance and raw activeMembership do not decide this badge.
+  A future enrollment can still allow advance booking while its guardian badge
+  is inactive. Student scheduling calculations are intentionally unchanged.
+
+`tests/fixtures/guardian_ui_status.json` contains 21 expected cases generated by
+executing the published frontend helper with its original Moment dependency and
+fixed `moment.now`, including boundaries, offsets and mixed-window behavior.

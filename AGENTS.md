@@ -7,11 +7,12 @@ This repo contains a read-only Mathnasium support MCP server. Before changing co
 - Do not push without explicit user permission.
 - Do not include `.bifrost.yaml` unless the user explicitly asks for deployment config changes.
 - Keep this MCP read-only. Do not add create/update/delete/write tools without explicit approval and a human-approval design.
-- Preserve the existing six public tools unless the user asks otherwise:
+- Preserve the existing public tools unless the user asks otherwise:
   - `mathnasium_get_group_context`
   - `mathnasium_find_center`
   - `mathnasium_find_guardian`
   - `mathnasium_find_student`
+  - `mathnasium_find_appointments`
   - `mathnasium_get_entity`
   - `mathnasium_search_custom_logs`
 - Guardian lookup must remain scoped. Never add a blind/global guardian scan.
@@ -195,7 +196,7 @@ curl http://127.0.0.1:8137/health
 Expected:
 
 - `/health` returns HTTP 200.
-- MCP lists all six tools.
+- MCP lists all seven tools.
 - `mathnasium_get_group_context` returns `status: success`.
 - `mathnasium_find_center` returns center matches.
 - `mathnasium_get_entity` can fetch scoped services for a location.
@@ -213,3 +214,13 @@ Before committing:
 - Tests pass.
 - Compile passes.
 - Docs/skill updated if workflow changed.
+
+## Verified Support Read Modules
+
+- `scopes.py`: exact short/full ID resolution and configured-group checks.
+- `support_queries.py`: allowlisted API-key-verified read queries only.
+- `support_reads.py`: bounded typed entity contracts, cursor binding and evidence limitations.
+- `appointment_search.py`: filtered upstream appointment connection; never restore local calendar offset paging.
+- Extend the entity Literal and README/skill table together. Do not expose arbitrary GraphQL.
+- Keep backend-gap reads excluded until successful API-key verification; browser sessions are not sufficient.
+- Log continuation uses native GCP pages and a maximum 25-second application deadline; page summaries are not full-window totals.
