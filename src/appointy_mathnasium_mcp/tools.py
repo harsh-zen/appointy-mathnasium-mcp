@@ -144,6 +144,9 @@ async def mathnasium_get_entity(
             "instructor_services",
             "consumer_appointment_count",
             "radius_student",
+            "monthly_utilization",
+            "overbooking_report",
+            "notification_history",
         ],
         Field(
             description="Exact entity type to fetch. For services, results include session-type membership links, grade-range links, durations, active status, and booking-rule metadata. Use dedicated tools for centers, guardians, and students."
@@ -175,7 +178,7 @@ async def mathnasium_get_entity(
     ] = None,
     limit: Annotated[
         int,
-        Field(description="Maximum list items to return, capped at 100.", ge=1, le=100),
+        Field(description="Maximum list items to return, capped at 100; report modes require at most 50.", ge=1, le=100),
     ] = 25,
     refreshContext: Annotated[
         bool,
@@ -220,13 +223,13 @@ async def mathnasium_get_entity(
     startTo: Annotated[
         Optional[str],
         Field(
-            description="ISO upper bound; maximum 7 days for slots/durations, 31 for availability_window, 90 for activity_logs."
+            description="ISO upper bound; maximum 24 hours for notification_history, 7 days for slots/durations, 31 for availability_window, 90 for activity_logs."
         ),
     ] = None,
     timezone: Annotated[
         str,
         Field(
-            description="Timezone used for remaining-bookable and slot calculations; do not guess the center timezone."
+            description="Timezone for monthly_utilization, remaining-bookable and slots; use the center timezone. overbooking_report uses a UTC month anchor and notification_history explicit timestamp offsets: leave timezone=UTC for those two."
         ),
     ] = "UTC",
     durationSeconds: Annotated[
@@ -263,13 +266,19 @@ async def mathnasium_get_entity(
     ipAddress: Annotated[
         Optional[str], Field(description="activity_logs only: upstream actor IP-address filter."),
     ] = None,
+    reportMonth: Annotated[
+        Optional[str], Field(description="Required YYYY-MM for monthly_utilization (start month; may return later months) and overbooking_report (UTC month anchor). Not a date-range filter."),
+    ] = None,
+    notificationAddress: Annotated[
+        Optional[str], Field(description="notification_history only: upstream email-recipient address filter, not an actor filter. Requires startFrom/startTo spanning at most 24 hours. EMAIL send events only, not delivery/bounce evidence."),
+    ] = None,
     # FastMCP drops unknown keys; capture this legacy key solely to reject it.
     type: Annotated[
         Optional[str],
         Field(description="Unsupported legacy argument. Always rejected; use entityType and activity eventIds/displayEventName instead."),
     ] = None,
 ) -> Dict[str, Any]:
-    """Read exact scoped entities and verified support configuration. booking_rules: location/service policies; portal_settings: booking toggles; availability_rules/window: configured hours; bookable_slots/durations: student/enrollment/service date checks; enrollment_balance: remaining-bookable buckets (not usage history); recurring_series: seed appointment entityId; attendance_statuses: configured no-show etc; activity_logs: bounded audit evidence; guardian_profile/student_audit: timezone/timestamps; record_metadata: company/location AutoInvites; instructor_services: assignments; consumer_appointment_count: undated count; radius_student: current wrapper projection, not sync history. No writes or authoritative full-reason diagnosis."""
+    """Read exact scoped entities and verified support configuration. booking_rules: location/service policies; portal_settings: booking toggles; availability_rules/window: configured hours; bookable_slots/durations: student/enrollment/service date checks; enrollment_balance: remaining-bookable buckets (not usage history); recurring_series: seed appointment entityId; attendance_statuses: configured no-show etc; activity_logs: bounded audit evidence; guardian_profile/student_audit: timezone/timestamps; record_metadata: company/location AutoInvites; instructor_services: assignments; consumer_appointment_count: undated count; radius_student: current wrapper projection, not sync history; monthly_utilization: raw allowance/booked-month buckets; overbooking_report: upstream monthly overbooking rows; notification_history: EMAIL send events over <=24h, not delivery status. No writes or authoritative full-reason diagnosis."""
     config_error = require_config()
     if config_error:
         return config_error
@@ -278,6 +287,8 @@ async def mathnasium_get_entity(
             raise ValueError(
                 "type is not a supported filter. Use entityType; for activity_logs use eventIds or displayEventName."
             )
+        if entityType not in {"monthly_utilization", "overbooking_report", "notification_history"} and (reportMonth is not None or notificationAddress is not None):
+            raise ValueError("reportMonth and notificationAddress apply only to report entity types.")
         if entityType != "activity_logs" and any(
             value is not None for value in (displayEventName, userEmail, userId, ipAddress)
         ):
@@ -320,6 +331,8 @@ async def mathnasium_get_entity(
                 user_email=userEmail,
                 user_id=userId,
                 ip_address=ipAddress,
+                report_month=reportMonth,
+                notification_address=notificationAddress,
             )
         if entityType in {
             "group_settings",

@@ -263,7 +263,7 @@ Follow every `next_cursor` with identical filters. Availability's local continua
 re-reads a bounded window and is not a stable snapshot. For logs, use `cursor` to
 continue partial searches. `summaryOnly` summarizes the returned page, not the whole
 time range. A timeout, `partial=true`, or remaining cursor is not proof of no request.
-Do not call blocked reports or claim email delivery, sync history or complete
+Use the verified report types below; do not claim email delivery, sync history or complete
 eligibility explanations are available.
 
 
@@ -284,3 +284,19 @@ than scanning months; if stopping early, state the unsearched coverage.
 Do not pass `type`, `entityId` or `serviceId`: these are rejected, not supported
 activity target filters. Other entity/booking-specific filters are also rejected.
 Do not claim the old/new setting value unless present in audit evidence.
+
+## Monthly usage and email-send reports
+
+Use the three new `get_entity` modes and instructions in
+`REPORT_AGENT_INSTRUCTIONS.md`:
+
+- `monthly_utilization`: company/location `parentId`, `reportMonth` YYYY-MM,
+  center `timezone`. Raw allowance and booked-month buckets; native continuation.
+- `overbooking_report`: `parentId`, `reportMonth`; default UTC. Local continuation
+  cannot overcome `source_truncated=true` from an upstream download cap.
+- `notification_history`: `parentId`, dates <=24 hours, optional recipient
+  `notificationAddress`; default UTC, explicit offsets. Send events, NOT delivery.
+
+Maximum report page size 50. No student/enrollment/service target filters.
+Follow identical filters and limit for every cursor. Report partial coverage when
+stopping. Do not confuse utilization with Radius balance or attendance attribution.

@@ -43,3 +43,9 @@ COMPANY_CONTEXT = 'query SupportRead($id:ID){company(id:$id){id title displayNam
 LOCATION_CONTEXT = "query SupportRead($id:ID){location(id:$id){id name customLocationId active metadata preference{timezone currency language dateFormat timeFormat} slugObject{slugValue} address{country locality postalCode region streetAddress} telephones}}"
 
 STUDENT_TIMESTAMPS = 'query SupportRead($id:ID){student(id:$id,viewMask:{paths:["id","created_on","updated_on"]}){id createdOn updatedOn}}'
+
+MONTHLY_UTILIZATION = "query SupportRead($p:String,$date:Timestamp,$tz:String,$n:Int,$o:Int){enrollmentUnderUtilizationReport(parent:$p,startDate:$date,timezone:$tz,limit:$n,offset:$o){edges{data{studentId studentName guardianId enrolmentId allowedSessions maxSessions bookedSessions{month count outsideBookingWindow}}}pageInfo{hasNextPage nextOffset}}}"
+
+OVERBOOKING_REPORT = "query SupportRead($p:String,$date:Timestamp){mathnasiumOverBookingReport(parent:$p,date:$date){total downloadLimit nodes{id enrolmentId appointmentDate{startTime endTime} bookingDate bookedByAdmin sessionName sessionDuration studentData{studentId}}}}"
+
+NOTIFICATION_HISTORY = "query SupportRead($p:String,$start:Timestamp,$end:Timestamp,$address:String,$n:Int,$o:Int){notificationReport(parent:$p,channelType:EMAIL,startTime:$start,endTime:$end,notificationAddress:$address,limit:$n,offset:$o){total downloadLimit edges{node{id actualEventId description channelType notificationAddress sentOn sentFor recipientType triggeredBy{userId}}}pageInfo{hasNextPage nextOffset}}}"
