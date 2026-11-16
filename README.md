@@ -298,6 +298,5 @@ semantics must not be guessed from a zero allowance. Exact #12735 acceptance dat
 has not been confirmed. Large report windows can still be slow; notification reads
 are deliberately capped at one day, with no automatic retry or timeout increase.
 
-See `REPORT_AGENT_INSTRUCTIONS.md` and `REPORT_READ_TEST_REPORT.md` for examples,
-agent prompt updates and live test results. Production verification does not imply
+Production verification does not imply
 QA key grants have been updated; earlier QA report access was denied.
