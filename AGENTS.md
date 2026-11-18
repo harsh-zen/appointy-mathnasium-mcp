@@ -15,6 +15,8 @@ This repo contains a read-only Mathnasium support MCP server. Before changing co
   - `mathnasium_find_appointments`
   - `mathnasium_get_entity`
   - `mathnasium_search_custom_logs`
+  - `mathnasium_get_enrollment_sync_history`
+
 - Guardian lookup must remain scoped. Never add a blind/global guardian scan.
 - `MATHNASIUM_COMPANY_ID_OPTIONAL` was intentionally removed. Do not reintroduce it.
 
@@ -196,7 +198,7 @@ curl http://127.0.0.1:8137/health
 Expected:
 
 - `/health` returns HTTP 200.
-- MCP lists all seven tools.
+- MCP lists all eight tools.
 - `mathnasium_get_group_context` returns `status: success`.
 - `mathnasium_find_center` returns center matches.
 - `mathnasium_get_entity` can fetch scoped services for a location.

@@ -201,7 +201,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
         catalog = await tools.mcp.list_tools()
         by_name = {t.name: t for t in catalog}
-        self.assertEqual(len(catalog), 7)
+        self.assertEqual(len(catalog), 8)
         for name in [
             "mathnasium_get_entity",
             "mathnasium_find_appointments",

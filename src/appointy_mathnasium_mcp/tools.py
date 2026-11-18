@@ -589,3 +589,23 @@ async def mathnasium_search_custom_logs(
             "error": f"Unexpected error in custom log search: {exc}",
             "matches": [],
         }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+async def mathnasium_get_enrollment_sync_history(
+    radiusEnrollmentId: Annotated[str, Field(description="Exact Radius customEnrolmentId from student enrollment; not an Appointy path.")],
+    startTime: Annotated[str, Field(description="Inclusive ISO timestamp with offset, within the last 30 days.")],
+    endTime: Annotated[str, Field(description="Exclusive ISO timestamp with offset; at most one hour after startTime.")],
+    limit: Annotated[int, Field(ge=1, le=25, description="Maximum upstream log rows per page.")] = 10,
+    cursor: Annotated[Optional[str], Field(description="Continue with identical arguments.")] = None,
+) -> Dict[str, Any]:
+    """Read scoped Radius enrollment PUT observations: incoming balances, successful response balances and failures. Not a commit or retry journal."""
+    from .enrollment_sync import read_enrollment_sync
+
+    config_error = require_gcp_logging_config()
+    if config_error:
+        return config_error
+    try:
+        return await read_enrollment_sync(radiusEnrollmentId, startTime, endTime, limit, cursor)
+    except (ValueError, GcpLoggingError) as exc:
+        return {"status": "failed", "error": str(exc), "events": []}
