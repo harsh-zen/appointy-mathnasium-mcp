@@ -152,7 +152,7 @@ The support additions use existing GraphQL reads, not new Appointy backend endpo
 | `bookable_slots` | location `parentId`, `studentId`, `enrollmentId`, `serviceId`, `durationSeconds`, dates | Existing slot and eligible-service results; at most 7 days. Empty slots are not a complete diagnosis. |
 | `bookable_durations` | location `parentId`, `studentId`, `serviceId`, dates | Durations in seconds; at most 7 days. |
 | `enrollment_balance` | `studentId`, `guardianId` | Monthly remaining-bookable buckets; set the actual `timezone`. Not attendance counts or Radius history. |
-| `recurring_series` | seed appointment `entityId` | Series occurrences and recurrence rule. Direct `rec_` ID lookup is not available with the key. |
+| `recurring_series` | seed appointment `entityId` | Series occurrences and recurrence rule. Use a seed appointment; direct `rec_`-only lookup is not supported by this tool. |
 | `attendance_statuses` | location `parentId` | Custom attendance names/IDs such as No-show, separate from overall appointment status. |
 | `activity_logs` | `parentId`, dates | Audit evidence up to 90 days; optional exact `eventIds`; offset wrapped in a filter-bound cursor. Deleted snapshots can be incomplete. |
 | `guardian_profile` | guardian `entityId` | Stored profile timezone and available audit dates. |
@@ -202,8 +202,7 @@ indexing is not claimed by these changes.
 
 ### Excluded backend gaps
 
-No utilization/overbooking/notification report access, direct recurring-ID reads,
-provider delivery/suppression, sync/balance history, complete deleted-availability
+No direct recurring-ID reads, provider delivery/suppression, sync/balance history, complete deleted-availability
 snapshots or authoritative all-reasons eligibility endpoint is added. Null audit
 fields remain unknown. There are no writes, new authentication settings or deployment changes.
 
@@ -271,3 +270,33 @@ entity types. No new tool, raw query access or mutation was added.
 A stopped two-page scan is partial coverage, not evidence that no change occurred.
 Direct service/entity filtering still needs upstream support. Before/after setting
 values are only established if the audit payload actually contains them.
+
+### Read-only production reports
+
+Three additional `get_entity` modes are API-key-verified on production. All require
+company/location `parentId` and support `limit` 1-50 (default 25). Other entity IDs,
+student/guardian/enrollment/service filters and activity filters are rejected;
+these reports do not offer those upstream filters. Follow `next_cursor` with
+identical arguments, including limit. These modes do not change existing tools.
+
+| Type | Arguments | Returned evidence |
+| --- | --- | --- |
+| `monthly_utilization` | `reportMonth: YYYY-MM`, actual center `timezone` | Enrollment/student IDs, allowedSessions, maxSessions and raw bookedSessions month/count/outsideBookingWindow buckets. reportMonth is a START month, not an exclusive one-month filter. Native offset paging. |
+| `overbooking_report` | `reportMonth: YYYY-MM`; leave `timezone=UTC` | Upstream overbooking rows, enrollment/student IDs, appointment times, session and booking metadata, total/downloadLimit. No upstream timezone/paging argument; uses a UTC first-of-month date anchor and bounded local continuation over returned rows. |
+| `notification_history` | `startFrom`, `startTo` at most 24 hours; optional `notificationAddress`; leave `timezone=UTC` | EMAIL send events, recipient address, event ID/description, sent time and actor ID, total/downloadLimit. Native offset paging; explicit timestamp offsets define the window. Not delivery/bounce/suppression status. |
+
+Report dates use a verified first-of-month `00:00:00Z` anchor; utilization also
+forwards the supplied timezone. No additional date/time semantics or attendance
+attribution are inferred. Scope results to a student/enrollment by inspecting
+returned IDs; no local post-filter pretends to be server-side filtering.
+
+Overbooking `source_truncated=true` / `status=partial` means upstream returned fewer
+rows than total. Exhausting local pages does not recover omitted rows. Local
+continuation re-fetches the report; it is not a stable snapshot. A zero-row report
+is not proof of any particular ticket's root cause. Flexible/unlimited allowance
+semantics must not be guessed from a zero allowance. Exact #12735 acceptance data
+has not been confirmed. Large report windows can still be slow; notification reads
+are deliberately capped at one day, with no automatic retry or timeout increase.
+
+Production verification does not imply
+QA key grants have been updated; earlier QA report access was denied.

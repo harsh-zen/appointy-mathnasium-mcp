@@ -10,8 +10,9 @@ from .config import MATHNASIUM_GROUP_ID
 from .errors import AppointyApiError
 from .scopes import company_id, full_id
 from . import support_queries as q
+from .report_reads import REPORT_TYPES, read_report
 
-READ_TYPES = {
+READ_TYPES = REPORT_TYPES | {
     "booking_rules",
     "portal_settings",
     "availability_rules",
@@ -104,8 +105,45 @@ async def read_entity(
     user_email=None,
     user_id=None,
     ip_address=None,
+    report_month=None,
+    notification_address=None,
 ):
     """No natural-language dispatch, arbitrary GraphQL, or mutations."""
+    if entity_type in REPORT_TYPES:
+        unsupported = {
+            "entityId": entity_id,
+            "studentId": student_id,
+            "guardianId": guardian_id,
+            "enrollmentId": enrollment_id,
+            "serviceId": service_id,
+            "instructorId": instructor_id,
+            "durationSeconds": duration,
+            "eventIds": event_ids,
+            "displayEventName": display_event_name,
+            "userEmail": user_email,
+            "userId": user_id,
+            "ipAddress": ip_address,
+        }
+        supplied = [k for k, v in unsupported.items() if v is not None]
+        if supplied:
+            raise ValueError("Unsupported report filters: " + ", ".join(supplied))
+        return await read_report(
+            entity_type=entity_type,
+            parent_id=parent_id,
+            company=company,
+            location=location,
+            report_month=report_month,
+            notification_address=notification_address,
+            start=start,
+            end=end,
+            timezone=timezone,
+            limit=limit,
+            cursor=cursor,
+        )
+    if report_month is not None or notification_address is not None:
+        raise ValueError(
+            "reportMonth and notificationAddress apply only to report entity types."
+        )
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100.")
     activity_filters = {
