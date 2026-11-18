@@ -17,6 +17,8 @@ Behavior and response shapes can evolve as the underlying APIs evolve.
 - `mathnasium_get_entity`
 - `mathnasium_find_appointments`
 - `mathnasium_search_custom_logs`
+- `mathnasium_get_enrollment_sync_history`
+
 
 ## Data Source Notes:
 
@@ -81,6 +83,8 @@ Optional:
   - Optional `entityId` filters exact IDs from returned list results; no fuzzy name matching is performed.
   - This intentionally does not replace `mathnasium_find_center`, `mathnasium_find_guardian`, or `mathnasium_find_student`.
 - `mathnasium_search_custom_logs`
+- `mathnasium_get_enrollment_sync_history`
+
   - Use for non-standard log investigations where the agent already has exact terms, query IDs, request paths, endpoint names, or error/message text.
   - `source` can be `all`, `admin_requests`, `graphql`, or `radius_wrappers`.
   - Accepts `textTerms`, `identifiers`, `messages`, `queryIds`, `paths`, `endpointNames`, `statusCodes`, ISO `startTime`/`endTime`, and `matchAllTerms`.
@@ -300,3 +304,11 @@ are deliberately capped at one day, with no automatic retry or timeout increase.
 
 Production verification does not imply
 QA key grants have been updated; earlier QA report access was denied.
+
+### Enrollment sync history
+
+`mathnasium_get_enrollment_sync_history` reads scoped student PUT outcome logs
+for a Radius enrollment ID. It reports observed incoming and successful-response
+balances separately from failures. It does not change the general log-search tool.
+See [enrollment sync agent instructions](ENROLLMENT_SYNC_AGENT_INSTRUCTIONS.md)
+for scope, pagination and evidence limits.

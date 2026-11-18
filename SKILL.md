@@ -16,6 +16,8 @@ This skill is for read-only support lookup using these MCP tools:
 - `mathnasium_get_entity`
 - `mathnasium_find_appointments`
 - `mathnasium_search_custom_logs`
+- `mathnasium_get_enrollment_sync_history`
+
 
 ## When to use
 
@@ -284,3 +286,7 @@ than scanning months; if stopping early, state the unsearched coverage.
 Do not pass `type`, `entityId` or `serviceId`: these are rejected, not supported
 activity target filters. Other entity/booking-specific filters are also rejected.
 Do not claim the old/new setting value unless present in audit evidence.
+
+For Radius enrollment balance disputes, use the dedicated read described in
+[enrollment sync agent instructions](ENROLLMENT_SYNC_AGENT_INSTRUCTIONS.md).
+Do not treat response balances as independently verified commits.
